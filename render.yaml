@@ -1,22 +1,18 @@
 services:
   - type: web
-    name: msa-portal-postgres
+    name: msa-portal-postgres-test
     runtime: python
-    plan: starter
+    plan: free
     region: frankfurt
     branch: postgres-migration
     autoDeployTrigger: "off"
     buildCommand: pip install -r requirements.txt
     startCommand: python backend/server.py
     healthCheckPath: /api/health
-    disk:
-      name: msa-results-storage
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: MSA_REQUIRE_POSTGRES
         value: "1"
       - key: MSA_RESULTS_DIR
-        value: /var/data/results
+        value: /tmp/msa-results
