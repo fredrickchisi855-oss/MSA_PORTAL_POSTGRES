@@ -1,17 +1,11 @@
-import sqlite3
 import os
 import hashlib
 import secrets
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_FILE = BASE_DIR / "msa_portal.db"
-
-
-def get_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+from db_connection import get_connection, SQLITE_FILE
+DB_FILE = SQLITE_FILE
 
 
 def initialize_database():
@@ -151,6 +145,29 @@ def initialize_database():
         )
     """)
 
+
+    # Ensure older databases contain all password-reset request fields.
+    reset_columns = {
+        row[1]
+        for row in conn.execute(
+            "PRAGMA table_info(password_reset_requests)"
+        ).fetchall()
+    }
+
+    reset_additions = {
+        "student_name": "TEXT",
+        "student_id_code": "TEXT",
+        "student_form": "INTEGER",
+        "student_class_name": "TEXT",
+        "is_new": "INTEGER NOT NULL DEFAULT 1",
+    }
+
+    for column, definition in reset_additions.items():
+        if column not in reset_columns:
+            conn.execute(
+                f"ALTER TABLE password_reset_requests "
+                f"ADD COLUMN {column} {definition}"
+            )
 
     # Student login protection.
     cursor.execute("""

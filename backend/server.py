@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 from database import initialize_database
+from db_connection import get_connection
 import secrets
 
 app = Flask(__name__)
@@ -25,15 +26,11 @@ PORT = int(os.environ.get("PORT", "8081"))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(BASE_DIR)
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
+RESULTS_DIR = os.environ.get("MSA_RESULTS_DIR", os.path.join(BASE_DIR, "results"))
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def send_json(handler, data, status=200):
@@ -300,11 +297,30 @@ class MSAHandler(BaseHTTPRequestHandler):
 
         if path == "/api/health":
 
-            send_json(self, {
-                "ok": True,
-                "app": "MSA PORTAL",
-                "database": "connected"
-            })
+            health_conn = None
+            try:
+                health_conn = get_connection()
+                health_conn.execute("SELECT 1").fetchone()
+                health_conn.close()
+                health_conn = None
+
+                send_json(self, {
+                    "ok": True,
+                    "app": "MSA PORTAL",
+                    "database": "connected"
+                })
+            except Exception:
+                if health_conn is not None:
+                    try:
+                        health_conn.close()
+                    except Exception:
+                        pass
+
+                send_json(self, {
+                    "ok": False,
+                    "app": "MSA PORTAL",
+                    "database": "unavailable"
+                }, 503)
 
             return
 
@@ -2187,7 +2203,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 max_row = conn.execute("""
                     SELECT MAX(
                         CASE
-                            WHEN student_id_code LIKE 'MSA-%'
+                            WHEN SUBSTR(student_id_code, 1, 4) = 'MSA-'
                             THEN CAST(SUBSTR(student_id_code, 5) AS INTEGER)
                             ELSE 0
                         END
@@ -2299,12 +2315,71 @@ class MSAHandler(BaseHTTPRequestHandler):
                     data["term"]
                 )
 
+                import re
+
                 file_name = os.path.basename(
-                    str(data["file_name"])
+                    str(data["file_name"]).strip()
                 )
+                file_name = re.sub(
+                    r"[^A-Za-z0-9._ -]", "_", file_name
+                ).strip(" .")
+
+                if (
+                    not file_name
+                    or not file_name.lower().endswith(".pdf")
+                ):
+                    send_json(self, {
+                        "ok": False,
+                        "message": "Please upload a PDF file."
+                    }, 400)
+                    return
 
                 file_data = data["file_data"]
 
+                if not isinstance(file_data, str) or not file_data:
+                    send_json(self, {
+                        "ok": False,
+                        "message": "Invalid PDF data."
+                    }, 400)
+                    return
+
+                if len(file_data) > 14_000_000:
+                    send_json(self, {
+                        "ok": False,
+                        "message": "PDF exceeds the 10 MiB limit."
+                    }, 413)
+                    return
+
+
+                import base64
+                import binascii
+
+                try:
+                    file_bytes = base64.b64decode(
+                        file_data, validate=True
+                    )
+                except (binascii.Error, ValueError):
+                    send_json(self, {
+                        "ok": False,
+                        "message": "Invalid PDF encoding."
+                    }, 400)
+                    return
+
+                if len(file_bytes) > 10 * 1024 * 1024:
+                    send_json(self, {
+                        "ok": False,
+                        "message": "PDF exceeds the 10 MiB limit."
+                    }, 413)
+                    return
+
+                if not file_bytes.startswith(b"%PDF-"):
+                    send_json(self, {
+                        "ok": False,
+                        "message": "The uploaded file is not a valid PDF."
+                    }, 400)
+                    return
+
+                # -------------------------------------
 
                 conn = get_connection()
 
@@ -2332,33 +2407,6 @@ class MSAHandler(BaseHTTPRequestHandler):
                 # SAVE FILE
                 # -------------------------------------
 
-                import base64
-
-                file_bytes = base64.b64decode(
-                    file_data
-                )
-
-                safe_name = (
-                    f"{student_id}_"
-                    f"{academic_year}_"
-                    f"{term.replace(' ', '_')}_"
-                    f"{file_name}"
-                )
-
-                file_path = os.path.join(
-                    RESULTS_DIR,
-                    safe_name
-                )
-
-                with open(
-                    file_path,
-                    "wb"
-                ) as file:
-
-                    file.write(file_bytes)
-
-
-                # -------------------------------------
                 # KEEP PREVIOUS RESULTS IN HISTORY
                 # -------------------------------------
                 # Never replace an existing result.
@@ -3009,7 +3057,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                       OR (
                           status = 'approved'
                           AND expires_at IS NOT NULL
-                          AND expires_at > CURRENT_TIMESTAMP
+                          AND NULLIF(expires_at, '')::timestamptz > CURRENT_TIMESTAMP
                       )
                   )
                 ORDER BY id DESC
@@ -3459,7 +3507,12 @@ class MSAHandler(BaseHTTPRequestHandler):
 
 def main():
 
-    initialize_database()
+    # PostgreSQL has already been migrated and verified.
+    # Avoid running the SQLite-oriented initializer against Neon.
+    if not os.environ.get("DATABASE_URL", "").strip():
+        initialize_database()
+    else:
+        print("✓ PostgreSQL selected; startup initialization skipped.")
 
     server = HTTPServer(
         (HOST, PORT),

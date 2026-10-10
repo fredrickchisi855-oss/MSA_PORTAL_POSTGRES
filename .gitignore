@@ -43,3 +43,22 @@ android_app/local.properties
 *.db-wal
 *.db-shm
 backups/
+
+# Secrets and environment files - never upload
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Secrets and environment files - never upload
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+safety_checkpoints/
+scripts/__pycache__/
+*.py[cod]
