@@ -2782,8 +2782,26 @@ class MSAHandler(BaseHTTPRequestHandler):
 
                 try:
                     file_path = store_result_pdf(safe_name, file_bytes)
-                except Exception:
-                    print("RESULT PDF UPLOAD ERROR: storage write failed")
+                except Exception as error:
+                    error_code = ""
+                    http_status = ""
+                    response = getattr(error, "response", None)
+
+                    if isinstance(response, dict):
+                        error_info = response.get("Error", {})
+                        if isinstance(error_info, dict):
+                            error_code = str(error_info.get("Code", ""))[:80]
+
+                        metadata = response.get("ResponseMetadata", {})
+                        if isinstance(metadata, dict):
+                            http_status = str(metadata.get("HTTPStatusCode", ""))[:10]
+
+                    print(
+                        "RESULT PDF UPLOAD ERROR:",
+                        type(error).__name__,
+                        "code=" + error_code,
+                        "http_status=" + http_status
+                    )
                     conn.close()
                     send_json(self, {
                         "ok": False,
