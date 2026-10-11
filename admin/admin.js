@@ -4796,7 +4796,11 @@ async function msaLoadAdminAnnouncements() {
                                 <button type="button" class="secondary-button"
                                     onclick="msaDisableAnnouncement(${Number(item.id)})">
                                     DISABLE
-                                </button>` : ""}
+                                </button>` : `
+                                <button type="button" class="secondary-button"
+                                    onclick="msaActivateAnnouncement(${Number(item.id)})">
+                                    ACTIVATE
+                                </button>`}
                         </div>
                     </article>
                 `;
@@ -4904,6 +4908,42 @@ async function msaSaveAnnouncement() {
         await msaLoadAdminAnnouncements();
     } catch (error) {
         status.textContent = error.message || "Unable to save announcement.";
+    }
+}
+
+async function msaActivateAnnouncement(id) {
+    if (!confirm("Activate this announcement for parents and students?")) {
+        return;
+    }
+
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+    if (!token) {
+        alert("Administrator login required.");
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/admin/announcements", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token
+            },
+            body: JSON.stringify({
+                action: "activate",
+                id: Number(id)
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || "Could not activate announcement.");
+        }
+
+        alert(data.message || "Announcement activated.");
+        await msaLoadAdminAnnouncements();
+    } catch (error) {
+        alert(error.message || "Unable to activate announcement.");
     }
 }
 

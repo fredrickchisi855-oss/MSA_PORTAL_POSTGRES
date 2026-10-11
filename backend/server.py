@@ -2333,6 +2333,31 @@ class MSAHandler(BaseHTTPRequestHandler):
             action = str(data.get("action", "create")).strip().lower()
             conn = get_connection()
             try:
+                if action == "activate":
+                    try:
+                        announcement_id = int(data.get("id"))
+                    except (TypeError, ValueError):
+                        send_json(self, {"ok": False,
+                            "message": "Invalid announcement ID."}, 400)
+                        return
+
+                    cursor = conn.execute("""
+                        UPDATE announcements
+                        SET active = 1,
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+                        WHERE id = ?
+                    """, (announcement_id,))
+
+                    if cursor.rowcount == 0:
+                        send_json(self, {"ok": False,
+                            "message": "Announcement not found."}, 404)
+                        return
+
+                    conn.commit()
+                    send_json(self, {"ok": True,
+                        "message": "Announcement activated."})
+                    return
+
                 if action == "disable":
                     try:
                         announcement_id = int(data.get("id"))
