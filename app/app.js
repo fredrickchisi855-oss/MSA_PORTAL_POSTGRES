@@ -1875,3 +1875,92 @@ async function viewResult(name, form) {
 function adminLogin() {
     window.location.href = "/admin/";
 }
+
+
+/* ---------------------------------------------------------
+   MSA PORTAL PUBLIC ANNOUNCEMENT POPUP
+   --------------------------------------------------------- */
+
+function msaAnnouncementEscapeHTML(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+        return {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        }[c];
+    });
+}
+
+async function msaLoadAnnouncements() {
+    try {
+        const response = await fetch("/api/announcements", {
+            cache: "no-store"
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok || !Array.isArray(data.announcements)) {
+            return;
+        }
+
+        const announcements = data.announcements;
+        if (!announcements.length) return;
+
+        // Avoid duplicate popups if this function is called again.
+        if (document.getElementById("msa-announcement-overlay")) return;
+
+        const overlay = document.createElement("div");
+        overlay.id = "msa-announcement-overlay";
+        overlay.className = "msa-announcement-overlay";
+        overlay.setAttribute("role", "dialog");
+        overlay.setAttribute("aria-modal", "true");
+        overlay.setAttribute("aria-labelledby", "msa-announcement-heading");
+
+        overlay.innerHTML = `
+            <div class="msa-announcement-dialog">
+                <button type="button" class="msa-announcement-close"
+                    aria-label="Close announcements">&times;</button>
+                <div class="msa-announcement-brand">MWASHITA ACADEMY</div>
+                <h2 id="msa-announcement-heading">📢 School Announcements</h2>
+                <div class="msa-announcement-items">
+                    ${announcements.map(function (item) {
+                        const heading = item.announcement_type === "results_are_out"
+                            ? "RESULTS ARE OUT" : "RESULTS COMING SOON";
+
+                        return `
+                            <article class="msa-announcement-item">
+                                <h3>${heading}</h3>
+                                <h4>${msaAnnouncementEscapeHTML(item.title)}</h4>
+                                <p>${msaAnnouncementEscapeHTML(item.message).replace(/\n/g, "<br>")}</p>
+                            </article>
+                        `;
+                    }).join("")}
+                </div>
+                <button type="button" class="msa-announcement-ok">
+                    CONTINUE TO PORTAL
+                </button>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        function closeAnnouncementPopup() {
+            overlay.remove();
+        }
+
+        overlay.querySelector(".msa-announcement-close")
+            .addEventListener("click", closeAnnouncementPopup);
+        overlay.querySelector(".msa-announcement-ok")
+            .addEventListener("click", closeAnnouncementPopup);
+        overlay.addEventListener("click", function (event) {
+            if (event.target === overlay) closeAnnouncementPopup();
+        });
+    } catch (error) {
+        // Announcements must never prevent the results portal from opening.
+        console.warn("MSA announcements could not be loaded.", error);
+    }
+}
+
+// app.js is loaded at the end of the portal HTML, after the body exists.
+msaLoadAnnouncements();

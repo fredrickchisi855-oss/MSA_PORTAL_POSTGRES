@@ -4011,6 +4011,15 @@ function showResultsManagementScreen() {
                     <small>Make results available</small>
                 </button>
 
+                <button
+                    type="button"
+                    class="section-action-card"
+                    onclick="showManageIndividualResults()">
+                    <span>🗂️</span>
+                    <strong>Manage Individual Results</strong>
+                    <small>Unpublish or delete selected results</small>
+                </button>
+
             </div>
 
             <div id="adminContent"></div>
@@ -4037,6 +4046,16 @@ function showAcademicManagementScreen() {
                     <span>📅</span>
                     <strong>Academic Years</strong>
                     <small>Manage academic years</small>
+                </button>
+
+
+                <button
+                    type="button"
+                    class="section-action-card"
+                    onclick="showAnnouncementsAdmin()">
+                    <span>📢</span>
+                    <strong>Announcements</strong>
+                    <small>Publish messages for parents and students</small>
                 </button>
 
             </div>
@@ -4456,3 +4475,467 @@ window.mainAdminToggle = mainAdminToggle;
 window.mainAdminEdit = mainAdminEdit;
 window.mainAdminChangePassword = mainAdminChangePassword;
 
+
+
+/* ---------------------------------------------------------
+   MANAGE INDIVIDUAL RESULTS
+   --------------------------------------------------------- */
+
+async function showManageIndividualResults() {
+    let content = document.getElementById("adminContent");
+    if (!content) {
+        alert("Results screen container was not found.");
+        return;
+    }
+
+    content.innerHTML = '<div class="admin-panel"><p>Loading results...</p></div>';
+
+    await loadResults();
+
+    content = document.getElementById("adminContent");
+    if (!content) return;
+
+    content.innerHTML = `
+        <div class="admin-panel">
+            <h2>Manage Individual Results</h2>
+            <p class="muted">
+                Unpublish a result to hide it while keeping its record and PDF.
+                Delete only when you intend to remove the selected result.
+            </p>
+
+            <div class="section-action-grid">
+                <button type="button" class="admin-button"
+                    onclick="showManageIndividualResults()">
+                    ↻ Refresh Results
+                </button>
+                <button type="button" class="admin-button"
+                    onclick="unpublishAllResults()">
+                    Unpublish All Results
+                </button>
+            </div>
+
+            <div id="manageIndividualResultsList">
+                ${renderManageIndividualResultsList()}
+            </div>
+        </div>
+    `;
+}
+
+function renderManageIndividualResultsList() {
+    if (!Array.isArray(results) || !results.length) {
+        return '<p class="muted">No results available.</p>';
+    }
+
+    return results.map(result => {
+        const id = Number(result.id);
+        const name = escapeHtml(result.student_name || "Unknown student");
+        const form = escapeHtml(result.form ?? result.class_name ?? "Unknown form");
+        const term = escapeHtml(result.term || "Unknown term");
+        const year = escapeHtml(result.academic_year ?? "Unknown year");
+        const file = escapeHtml(result.file_name || "Result PDF");
+        const published = result.published === true ||
+            Number(result.published) === 1;
+
+        if (!Number.isInteger(id) || id < 1) return "";
+
+        return `
+            <div class="result-row">
+                <strong>${name}</strong>
+                <p>Form/Class: ${form}</p>
+                <p>Term: ${term} • Year: ${year}</p>
+                <p>File: ${file}</p>
+                <p>Status: <strong>${published ? "PUBLISHED" : "UNPUBLISHED"}</strong></p>
+
+                <div class="section-action-grid">
+                    ${published ? `
+                        <button type="button" class="admin-button"
+                            onclick="unpublishIndividualResult(${id})">
+                            Unpublish
+                        </button>
+                    ` : `
+                        <button type="button" class="admin-button" disabled>
+                            Already Unpublished
+                        </button>
+                    `}
+                    <button type="button" class="admin-button danger"
+                        onclick="deleteIndividualResult(${id})">
+                        Delete This Result
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+async function manageResultPost(path) {
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+    if (!token) {
+        throw new Error("Your administrator session has expired. Please log in again.");
+    }
+
+    const response = await fetch(path, {
+        method: "POST",
+        headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({})
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+        throw new Error(data.message || "The result action failed.");
+    }
+    return data;
+}
+
+async function unpublishIndividualResult(id) {
+    const result = results.find(item => Number(item.id) === Number(id));
+    if (!result) {
+        alert("Result not found. Refresh the list and try again.");
+        return;
+    }
+
+    const details = `${result.student_name || "Unknown student"}\nForm: ${result.form ?? result.class_name ?? "Unknown"}\nTerm: ${result.term || "Unknown"}\nYear: ${result.academic_year ?? "Unknown"}`;
+
+    if (!confirm(`Unpublish this result?\n\n${details}\n\nThe record and PDF will be kept.`)) return;
+
+    try {
+        const data = await manageResultPost(`/api/results/${Number(id)}/unpublish`);
+        alert(data.message || "Result unpublished.");
+        await showManageIndividualResults();
+    } catch (error) {
+        alert(error.message || "Could not unpublish result.");
+    }
+}
+
+async function unpublishAllResults() {
+    const count = results.filter(item =>
+        item.published === true || Number(item.published) === 1
+    ).length;
+
+    if (!count) {
+        alert("There are no published results to unpublish.");
+        return;
+    }
+
+    if (!confirm(`Unpublish all ${count} currently published result(s)?\n\nAll result records and PDFs will be kept. Students will no longer be able to view published results.`)) return;
+
+    try {
+        const data = await manageResultPost("/api/results/unpublish-all");
+        alert(data.message || "All results unpublished.");
+        await showManageIndividualResults();
+    } catch (error) {
+        alert(error.message || "Could not unpublish all results.");
+    }
+}
+
+async function deleteIndividualResult(id) {
+    const result = results.find(item => Number(item.id) === Number(id));
+    if (!result) {
+        alert("Result not found. Refresh the list and try again.");
+        return;
+    }
+
+    const details = `${result.student_name || "Unknown student"}\nForm: ${result.form ?? result.class_name ?? "Unknown"}\nTerm: ${result.term || "Unknown"}\nYear: ${result.academic_year ?? "Unknown"}\nFile: ${result.file_name || "Unknown file"}`;
+
+    if (!confirm(`DELETE THIS RESULT?\n\n${details}\n\nThis removes the selected result record and attempts to remove its PDF. This action cannot be undone.`)) return;
+
+    if (!confirm("Final confirmation: permanently delete this result?")) return;
+
+    try {
+        const data = await manageResultPost(`/api/results/${Number(id)}/delete`);
+        alert(
+            (data.message || "Result deleted.") +
+            (data.file_removed ? "\nAssociated PDF removed." :
+                "\nThe result record was deleted. The PDF may not have been found in the managed results folder.")
+        );
+        await showManageIndividualResults();
+        if (typeof loadStats === "function") await loadStats();
+    } catch (error) {
+        alert(error.message || "Could not delete result.");
+    }
+}
+
+
+/* ---------------------------------------------------------
+   MSA PORTAL ANNOUNCEMENTS
+   --------------------------------------------------------- */
+
+window.msaEditingAnnouncementId = null;
+
+function msaAnnouncementEscape(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+        return {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;"
+        }[c];
+    });
+}
+
+function showAnnouncementsAdmin() {
+    showAdminSectionScreen(
+        "📢 ANNOUNCEMENTS",
+        "Publish and manage messages shown to parents and students.",
+        `
+            <div class="section-action-grid">
+                <button type="button" class="section-action-card"
+                    onclick="msaResetAnnouncementForm()">
+                    <span>➕</span>
+                    <strong>New Announcement</strong>
+                    <small>Write a new message</small>
+                </button>
+            </div>
+
+            <div id="msaAnnouncementEditor"
+                 style="margin-top:18px;padding:16px;border:1px solid #ddd;border-radius:12px;">
+                <h3 id="msaAnnouncementFormHeading">Publish Announcement</h3>
+
+                <label for="msaAnnouncementType">Announcement type</label>
+                <select id="msaAnnouncementType"
+                    style="display:block;width:100%;padding:12px;margin:8px 0 14px;">
+                    <option value="results_coming_soon">Results Coming Soon</option>
+                    <option value="results_are_out">Results Are Out</option>
+                </select>
+
+                <label for="msaAnnouncementTitle">Title</label>
+                <input id="msaAnnouncementTitle" maxlength="120"
+                    placeholder="Announcement title"
+                    style="display:block;width:100%;box-sizing:border-box;padding:12px;margin:8px 0 14px;">
+
+                <label for="msaAnnouncementMessage">Message</label>
+                <textarea id="msaAnnouncementMessage" maxlength="2000" rows="4"
+                    placeholder="Write the message for parents and students"
+                    style="display:block;width:100%;box-sizing:border-box;padding:12px;margin:8px 0 14px;"></textarea>
+
+                <button type="button" class="primary-button"
+                    onclick="msaSaveAnnouncement()">PUBLISH ANNOUNCEMENT</button>
+                <button type="button" class="secondary-button"
+                    onclick="msaResetAnnouncementForm()">CLEAR FORM</button>
+                <p id="msaAnnouncementStatus" role="status"></p>
+            </div>
+
+            <div id="msaAnnouncementList" style="margin-top:22px;">
+                <p>Loading announcements...</p>
+            </div>
+        `
+    );
+
+    msaLoadAdminAnnouncements();
+}
+
+function msaResetAnnouncementForm() {
+    window.msaEditingAnnouncementId = null;
+
+    const type = document.getElementById("msaAnnouncementType");
+    const title = document.getElementById("msaAnnouncementTitle");
+    const message = document.getElementById("msaAnnouncementMessage");
+    const heading = document.getElementById("msaAnnouncementFormHeading");
+    const status = document.getElementById("msaAnnouncementStatus");
+
+    if (type) type.value = "results_coming_soon";
+    if (title) title.value = "";
+    if (message) message.value = "";
+    if (heading) heading.textContent = "Publish Announcement";
+    if (status) status.textContent = "";
+
+    const submit = document.querySelector(
+        '#msaAnnouncementEditor button[onclick="msaSaveAnnouncement()"]'
+    );
+    if (submit) submit.textContent = "PUBLISH ANNOUNCEMENT";
+}
+
+async function msaLoadAdminAnnouncements() {
+    const target = document.getElementById("msaAnnouncementList");
+    if (!target) return;
+
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+    if (!token) {
+        target.textContent = "Administrator login required.";
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/admin/announcements", {
+            headers: { "Authorization": "Bearer " + token }
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || "Could not load announcements.");
+        }
+
+        // Keep announcement values out of inline JavaScript arguments.
+        window.msaAnnouncementsCache = data.announcements;
+
+        if (!data.announcements.length) {
+            target.innerHTML = "<p>No announcements have been created yet.</p>";
+            return;
+        }
+
+        target.innerHTML = `
+            <h3>Manage Announcements</h3>
+            ${data.announcements.map(function (item) {
+                const typeLabel = item.announcement_type === "results_are_out"
+                    ? "Results Are Out" : "Results Coming Soon";
+
+                return `
+                    <article style="padding:14px;margin:12px 0;border:1px solid #ddd;border-radius:12px;">
+                        <strong>${msaAnnouncementEscape(item.title)}</strong>
+                        <p>${msaAnnouncementEscape(item.message).replace(/\n/g, "<br>")}</p>
+                        <small>${typeLabel} · ${Number(item.active) === 1 ? "Active" : "Disabled"}</small>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+                            <button type="button" class="secondary-button"
+                                onclick="msaEditAnnouncementById(${Number(item.id)})">
+                                EDIT
+                            </button>
+                            ${Number(item.active) === 1 ? `
+                                <button type="button" class="secondary-button"
+                                    onclick="msaDisableAnnouncement(${Number(item.id)})">
+                                    DISABLE
+                                </button>` : ""}
+                        </div>
+                    </article>
+                `;
+            }).join("")}
+        `;
+    } catch (error) {
+        target.textContent = error.message || "Unable to load announcements.";
+    }
+}
+
+function msaEditAnnouncementById(id) {
+    const item = (window.msaAnnouncementsCache || []).find(function (entry) {
+        return Number(entry.id) === Number(id);
+    });
+
+    if (!item) {
+        alert("Could not find that announcement. Please reload the list.");
+        return;
+    }
+
+    msaEditAnnouncement(
+        item.id,
+        item.announcement_type,
+        item.title,
+        item.message
+    );
+}
+
+function msaEditAnnouncement(id, type, title, message) {
+    window.msaEditingAnnouncementId = Number(id);
+
+    document.getElementById("msaAnnouncementType").value = type;
+    document.getElementById("msaAnnouncementTitle").value = title;
+    document.getElementById("msaAnnouncementMessage").value =
+        message.replace(/\\n/g, "\n");
+
+    document.getElementById("msaAnnouncementFormHeading").textContent =
+        "Edit Announcement #" + id;
+
+    document.getElementById("msaAnnouncementStatus").textContent =
+        "Editing announcement #" + id;
+
+    const submit = document.querySelector(
+        '#msaAnnouncementEditor button[onclick="msaSaveAnnouncement()"]'
+    );
+    if (submit) submit.textContent = "SAVE CHANGES";
+
+    document.getElementById("msaAnnouncementEditor").scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+    });
+}
+
+async function msaSaveAnnouncement() {
+    const status = document.getElementById("msaAnnouncementStatus");
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+
+    const type = document.getElementById("msaAnnouncementType").value;
+    const title = document.getElementById("msaAnnouncementTitle").value.trim();
+    const message = document.getElementById("msaAnnouncementMessage").value.trim();
+
+    if (!token) {
+        status.textContent = "Administrator login required.";
+        return;
+    }
+
+    if (!title || !message) {
+        status.textContent = "Enter both a title and a message.";
+        return;
+    }
+
+    const editingId = window.msaEditingAnnouncementId;
+
+    const payload = {
+        action: editingId ? "edit" : "create",
+        announcement_type: type,
+        title: title,
+        message: message
+    };
+
+    if (editingId) payload.id = editingId;
+
+    status.textContent = "Saving...";
+
+    try {
+        const response = await fetch("/api/admin/announcements", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || "Could not save announcement.");
+        }
+
+        status.textContent = data.message || "Saved successfully.";
+        msaResetAnnouncementForm();
+        document.getElementById("msaAnnouncementStatus").textContent =
+            data.message || "Saved successfully.";
+        await msaLoadAdminAnnouncements();
+    } catch (error) {
+        status.textContent = error.message || "Unable to save announcement.";
+    }
+}
+
+async function msaDisableAnnouncement(id) {
+    if (!confirm("Disable this announcement for parents and students?")) {
+        return;
+    }
+
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+    if (!token) {
+        alert("Administrator login required.");
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/admin/announcements", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token
+            },
+            body: JSON.stringify({ action: "disable", id: Number(id) })
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || "Could not disable announcement.");
+        }
+
+        alert(data.message || "Announcement disabled.");
+        await msaLoadAdminAnnouncements();
+    } catch (error) {
+        alert(error.message || "Unable to disable announcement.");
+    }
+}

@@ -12,7 +12,8 @@ import mimetypes
 from pathlib import Path
 from datetime import datetime
 
-from database import initialize_database
+from database import initialize_database, ensure_postgres_admin
+from postgres_migrations import apply_postgres_migrations
 from db_connection import get_connection
 import secrets
 
@@ -326,6 +327,60 @@ class MSAHandler(BaseHTTPRequestHandler):
 
 
         # ---------------------------------------------
+
+        # SCHOOL ANNOUNCEMENTS
+        if path == "/api/announcements":
+            conn = get_connection()
+            try:
+                rows = conn.execute("""
+                    SELECT id, announcement_type, title, message,
+                           active, CAST(created_at AS TEXT) AS created_at,
+                           CAST(updated_at AS TEXT) AS updated_at
+                    FROM announcements
+                    WHERE active = 1
+                    ORDER BY created_at DESC, id DESC
+                """).fetchall()
+                send_json(self, {
+                    "ok": True,
+                    "announcements": [dict(row) for row in rows]
+                })
+            except Exception as error:
+                print("PUBLIC ANNOUNCEMENTS ERROR:", error)
+                send_json(self, {
+                    "ok": False,
+                    "message": "Announcements are temporarily unavailable."
+                }, 500)
+            finally:
+                conn.close()
+            return
+
+        if path == "/api/admin/announcements":
+            if not require_admin(self):
+                return
+            conn = get_connection()
+            try:
+                rows = conn.execute("""
+                    SELECT id, announcement_type, title, message, active,
+                           created_by,
+                           CAST(created_at AS TEXT) AS created_at,
+                           CAST(updated_at AS TEXT) AS updated_at
+                    FROM announcements
+                    ORDER BY created_at DESC, id DESC
+                """).fetchall()
+                send_json(self, {
+                    "ok": True,
+                    "announcements": [dict(row) for row in rows]
+                })
+            except Exception as error:
+                print("ADMIN ANNOUNCEMENTS ERROR:", error)
+                send_json(self, {
+                    "ok": False,
+                    "message": "Could not load announcements."
+                }, 500)
+            finally:
+                conn.close()
+            return
+
         # STUDENTS
         # ---------------------------------------------
 
@@ -590,8 +645,8 @@ class MSAHandler(BaseHTTPRequestHandler):
                                 SET
                                     failed_attempts = 5,
                                     blocked = 1,
-                                    blocked_at = CURRENT_TIMESTAMP,
-                                    last_failed_at = CURRENT_TIMESTAMP
+                                    blocked_at = CAST(CURRENT_TIMESTAMP AS TEXT),
+                                    last_failed_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                                 WHERE student_id = ?
                             """, (student["id"],))
 
@@ -620,7 +675,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                             UPDATE student_login_security
                             SET
                                 failed_attempts = ?,
-                                last_failed_at = CURRENT_TIMESTAMP
+                                last_failed_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                             WHERE student_id = ?
                         """, (
                             failed_attempts,
@@ -1085,7 +1140,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                         UPDATE admin_users
                         SET
                             active = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                         WHERE id = ?
                     """, (1 if enable else 0, admin_id))
 
@@ -1141,7 +1196,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                         UPDATE admin_users
                         SET
                             password_hash = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                         WHERE id = ?
                     """, (password_hash, admin_id))
 
@@ -1199,7 +1254,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                         SET
                             username = ?,
                             display_name = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                         WHERE id = ?
                     """, (
                         username,
@@ -1502,7 +1557,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 UPDATE password_reset_requests
                 SET
                     status = 'used',
-                    used_at = CURRENT_TIMESTAMP
+                    used_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                 WHERE id = ?
             """, (request_id,))
 
@@ -1786,7 +1841,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                     SET
                         username = ?,
                         display_name = ?,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                     WHERE id = ?
                 """, (
                     username,
@@ -1984,7 +2039,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                         UPDATE admin_users
                         SET
                             active = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                         WHERE id = ?
                     """, (1 if enable else 0, admin_id))
 
@@ -2041,7 +2096,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                         UPDATE admin_users
                         SET
                             password_hash = ?,
-                            updated_at = CURRENT_TIMESTAMP
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                         WHERE id = ?
                     """, (password_hash, admin_id))
 
@@ -2133,7 +2188,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 conn.execute("""
                     UPDATE admin_users
                     SET last_login_at = ?,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                     WHERE id = ?
                 """, (now, admin["id"]))
 
@@ -2269,6 +2324,197 @@ class MSAHandler(BaseHTTPRequestHandler):
 
 
         # ---------------------------------------------
+
+        # SCHOOL ANNOUNCEMENT MANAGEMENT
+        if path == "/api/admin/announcements":
+            if not require_admin(self):
+                return
+
+            action = str(data.get("action", "create")).strip().lower()
+            conn = get_connection()
+            try:
+                if action == "disable":
+                    try:
+                        announcement_id = int(data.get("id"))
+                    except (TypeError, ValueError):
+                        send_json(self, {"ok": False,
+                            "message": "Invalid announcement ID."}, 400)
+                        return
+
+                    cursor = conn.execute("""
+                        UPDATE announcements
+                        SET active = 0, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+                        WHERE id = ?
+                    """, (announcement_id,))
+                    if cursor.rowcount == 0:
+                        send_json(self, {"ok": False,
+                            "message": "Announcement not found."}, 404)
+                        return
+                    conn.commit()
+                    send_json(self, {"ok": True,
+                        "message": "Announcement disabled."})
+                    return
+
+                announcement_type = str(
+                    data.get("announcement_type", "")
+                ).strip()
+                title = str(data.get("title", "")).strip()
+                message = str(data.get("message", "")).strip()
+
+                if announcement_type not in (
+                    "results_coming_soon", "results_are_out"
+                ):
+                    send_json(self, {"ok": False,
+                        "message": "Choose a valid announcement type."}, 400)
+                    return
+                if not title or len(title) > 120:
+                    send_json(self, {"ok": False,
+                        "message": "Title is required and must be 120 characters or fewer."}, 400)
+                    return
+                if not message or len(message) > 2000:
+                    send_json(self, {"ok": False,
+                        "message": "Message is required and must be 2000 characters or fewer."}, 400)
+                    return
+
+                if action == "edit":
+                    try:
+                        announcement_id = int(data.get("id"))
+                    except (TypeError, ValueError):
+                        send_json(self, {"ok": False,
+                            "message": "Invalid announcement ID."}, 400)
+                        return
+
+                    cursor = conn.execute("""
+                        UPDATE announcements
+                        SET announcement_type = ?, title = ?, message = ?,
+                            updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+                        WHERE id = ?
+                    """, (announcement_type, title, message, announcement_id))
+                    if cursor.rowcount == 0:
+                        send_json(self, {"ok": False,
+                            "message": "Announcement not found."}, 404)
+                        return
+                    conn.commit()
+                    send_json(self, {"ok": True,
+                        "message": "Announcement updated successfully.",
+                        "id": announcement_id})
+                    return
+
+                if action != "create":
+                    send_json(self, {"ok": False,
+                        "message": "Unsupported announcement action."}, 400)
+                    return
+
+                session = get_admin_session(self) or {}
+                created_by = str(session.get("username", "admin"))
+                cursor = conn.execute("""
+                    INSERT INTO announcements
+                        (announcement_type, title, message, active, created_by)
+                    VALUES (?, ?, ?, 1, ?)
+                """, (announcement_type, title, message, created_by))
+                announcement_id = cursor.lastrowid
+                conn.commit()
+                send_json(self, {
+                    "ok": True,
+                    "message": "Announcement saved successfully.",
+                    "id": announcement_id
+                }, 201)
+            except Exception as error:
+                conn.rollback()
+                print("SAVE ANNOUNCEMENT ERROR:", error)
+                send_json(self, {"ok": False,
+                    "message": "Could not save the announcement."}, 500)
+            finally:
+                conn.close()
+            return
+
+        # RESULT UNPUBLISH / DELETE MANAGEMENT
+        if path == "/api/results/unpublish-all":
+            if not require_main_admin(self):
+                return
+            conn = get_connection()
+            try:
+                cursor = conn.execute("""
+                    UPDATE results
+                    SET published = 0, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+                    WHERE published = 1
+                """)
+                count = cursor.rowcount
+                conn.commit()
+                send_json(self, {"ok": True,
+                    "message": f"{count} result(s) unpublished.",
+                    "count": count})
+            except Exception as error:
+                conn.rollback()
+                print("UNPUBLISH ALL RESULTS ERROR:", error)
+                send_json(self, {"ok": False,
+                    "message": "Could not unpublish results."}, 500)
+            finally:
+                conn.close()
+            return
+
+        result_action = re.fullmatch(
+            r"/api/results/([0-9]+)/(unpublish|delete)", path
+        )
+        if result_action:
+            if not require_main_admin(self):
+                return
+
+            result_id = int(result_action.group(1))
+            action = result_action.group(2)
+            conn = get_connection()
+            file_path = None
+            try:
+                row = conn.execute("""
+                    SELECT id, file_path FROM results WHERE id = ?
+                """, (result_id,)).fetchone()
+
+                if row is None:
+                    send_json(self, {"ok": False,
+                        "message": "Result not found."}, 404)
+                    return
+
+                if action == "unpublish":
+                    conn.execute("""
+                        UPDATE results
+                        SET published = 0, updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
+                        WHERE id = ?
+                    """, (result_id,))
+                    conn.commit()
+                    send_json(self, {"ok": True,
+                        "message": "Result unpublished.",
+                        "result_id": result_id, "published": False})
+                    return
+
+                file_path = row["file_path"]
+                conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
+                conn.commit()
+
+                # Remove the PDF only after the database deletion commits.
+                if file_path:
+                    try:
+                        results_root = Path(RESULTS_DIR).resolve()
+                        candidate = Path(file_path).resolve()
+                        if (
+                            results_root in candidate.parents
+                            and candidate.is_file()
+                        ):
+                            candidate.unlink()
+                    except OSError as error:
+                        print("RESULT PDF CLEANUP WARNING:", error)
+
+                send_json(self, {"ok": True,
+                    "message": "Result record deleted.",
+                    "result_id": result_id})
+            except Exception as error:
+                conn.rollback()
+                print("RESULT MANAGEMENT ERROR:", error)
+                send_json(self, {"ok": False,
+                    "message": "Could not update the result."}, 500)
+            finally:
+                conn.close()
+            return
+
         # CREATE RESULT RECORD
         # ---------------------------------------------
 
@@ -2524,7 +2770,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 UPDATE results
                 SET
                     published = 1,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                 WHERE id = ?
             """, (result_id,))
 
@@ -2813,7 +3059,7 @@ class MSAHandler(BaseHTTPRequestHandler):
 
         if path == "/api/students/delete":
 
-            if not require_admin(self):
+            if not require_main_admin(self):
                 return
 
             conn = get_connection()
@@ -2863,12 +3109,17 @@ class MSAHandler(BaseHTTPRequestHandler):
 
                 conn.commit()
 
+                results_root = Path(RESULTS_DIR).resolve()
                 for file_path in result_files:
                     try:
-                        if os.path.exists(file_path):
-                            os.remove(file_path)
-                    except Exception:
-                        pass
+                        candidate = Path(file_path).resolve()
+                        if (
+                            results_root in candidate.parents
+                            and candidate.is_file()
+                        ):
+                            candidate.unlink()
+                    except OSError as error:
+                        print("STUDENT PDF CLEANUP WARNING:", error)
 
                 send_json(self, {
                     "ok": True,
@@ -3057,12 +3308,17 @@ class MSAHandler(BaseHTTPRequestHandler):
                       OR (
                           status = 'approved'
                           AND expires_at IS NOT NULL
-                          AND NULLIF(expires_at, '')::timestamptz > CURRENT_TIMESTAMP
+                          AND NULLIF(expires_at, '') > ?
                       )
                   )
                 ORDER BY id DESC
                 LIMIT 1
-            """, (student["id"],)).fetchone()
+            """, (
+                student["id"],
+                __import__("datetime").datetime.utcnow().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+            )).fetchone()
 
             if existing:
                 conn.close()
@@ -3483,7 +3739,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 UPDATE password_reset_requests
                 SET
                     status = 'used',
-                    used_at = CURRENT_TIMESTAMP
+                    used_at = CAST(CURRENT_TIMESTAMP AS TEXT)
                 WHERE id = ?
             """, (request_id,))
 
@@ -3506,14 +3762,25 @@ class MSAHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    database_url = os.environ.get("DATABASE_URL", "").strip()
 
-    # PostgreSQL has already been migrated and verified.
-    # Avoid running the SQLite-oriented initializer against Neon.
-    if not os.environ.get("DATABASE_URL", "").strip():
+    if not database_url:
         initialize_database()
     else:
-        print("✓ PostgreSQL selected; startup initialization skipped.")
+        print("PostgreSQL selected; SQLite initialization skipped.")
 
+        # Explicitly restricted to the test environment.
+        if os.environ.get("MSA_RUN_POSTGRES_MIGRATIONS") == "1":
+            if os.environ.get("MSA_DATABASE_ENV", "").strip().lower() != "test":
+                raise RuntimeError(
+                    "Refusing migrations: MSA_DATABASE_ENV must be test."
+                )
+            apply_postgres_migrations()
+
+        if os.environ.get("MSA_DATABASE_ENV", "").strip().lower() == "test":
+            ensure_postgres_admin()
+        else:
+            print("Administrator bootstrap skipped outside the test environment.")
     server = HTTPServer(
         (HOST, PORT),
         MSAHandler

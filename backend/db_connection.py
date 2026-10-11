@@ -64,6 +64,7 @@ def _postgres_sql(sql):
             "password_reset_requests",
             "student_login_security",
             "password_reset_attempts",
+            "announcements",
         }
         if table_name not in allowed_tables:
             raise ValueError(f"Unsupported table_info request: {table_name}")
@@ -139,7 +140,7 @@ def _postgres_sql(sql):
 
     # These inserts require a generated ID later in the existing code.
     if re.match(
-        r"^\s*INSERT\s+INTO\s+(students|results|password_reset_requests)\b",
+        r"^\s*INSERT\s+INTO\s+(students|results|password_reset_requests|announcements)\b",
         sql,
         re.IGNORECASE,
     ) and not re.search(r"\bRETURNING\b", sql, re.IGNORECASE):

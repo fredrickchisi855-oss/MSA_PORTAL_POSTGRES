@@ -238,5 +238,63 @@ def initialize_database():
     print(f"✓ Database: {DB_FILE}")
 
 
+
+
+def ensure_postgres_admin():
+    """Create the first PostgreSQL administrator only when none exists."""
+    import os
+    import secrets
+    import hashlib
+    from db_connection import get_connection
+
+    username = os.environ.get("MSA_ADMIN_USERNAME", "").strip()
+    password = os.environ.get("MSA_ADMIN_PASSWORD", "")
+    conn = get_connection()
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM admin_users")
+        row = cursor.fetchone()
+        admin_count = int(row[0])
+
+        # Never overwrite or reset existing administrator accounts.
+        if admin_count > 0:
+            print("Administrator bootstrap: existing account(s) preserved.")
+            return
+
+        if not username or not password:
+            print(
+                "WARNING: No administrator exists yet. Set "
+                "MSA_ADMIN_USERNAME and MSA_ADMIN_PASSWORD privately "
+                "in the test service environment, then restart."
+            )
+            return
+
+        if len(password) < 12:
+            raise ValueError(
+                "MSA_ADMIN_PASSWORD must be at least 12 characters."
+            )
+
+        salt = secrets.token_bytes(16)
+        iterations = 200000
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), salt, iterations
+        )
+        password_hash = (
+            f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}"
+        )
+
+        cursor.execute("""
+            INSERT INTO admin_users
+                (username, display_name, role, password_hash, active)
+            VALUES (?, ?, 'main_admin', ?, 1)
+        """, (username, username, password_hash))
+
+        conn.commit()
+        print("Initial PostgreSQL main administrator created.")
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     initialize_database()
