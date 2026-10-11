@@ -17,6 +17,99 @@ from postgres_migrations import apply_postgres_migrations
 from db_connection import get_connection
 import secrets
 
+
+
+# Cloudflare R2 storage for result PDFs.
+def _r2_configured():
+    names = (
+        "MSA_R2_ACCOUNT_ID",
+        "MSA_R2_ACCESS_KEY_ID",
+        "MSA_R2_SECRET_ACCESS_KEY",
+        "MSA_R2_BUCKET",
+    )
+    return all(os.environ.get(name) for name in names)
+
+
+def _r2_client():
+    import boto3
+
+    account_id = os.environ["MSA_R2_ACCOUNT_ID"]
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ["MSA_R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["MSA_R2_SECRET_ACCESS_KEY"],
+        region_name="auto",
+    )
+
+
+def _is_render():
+    return bool(
+        os.environ.get("RENDER_EXTERNAL_URL")
+        or os.environ.get("RENDER_SERVICE_ID")
+        or os.environ.get("RENDER") == "true"
+    )
+
+
+def store_result_pdf(filename, pdf_bytes):
+    if _r2_configured():
+        bucket = os.environ["MSA_R2_BUCKET"]
+        key = "results/" + filename
+        _r2_client().put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=pdf_bytes,
+            ContentType="application/pdf",
+        )
+        return "r2://" + bucket + "/" + key
+
+    if _is_render():
+        raise RuntimeError("Cloudflare R2 storage is not configured.")
+
+    local_path = os.path.join(RESULTS_DIR, filename)
+    with open(local_path, "wb") as output:
+        output.write(pdf_bytes)
+    return local_path
+
+
+def read_result_pdf(file_path):
+    if file_path and file_path.startswith("r2://"):
+        remainder = file_path[5:]
+        bucket, separator, key = remainder.partition("/")
+        if not separator or not bucket or not key:
+            raise FileNotFoundError("Invalid result storage reference.")
+
+        response = _r2_client().get_object(Bucket=bucket, Key=key)
+        try:
+            return response["Body"].read()
+        finally:
+            response["Body"].close()
+
+    if not file_path or not os.path.isfile(file_path):
+        raise FileNotFoundError("Result PDF is missing.")
+
+    with open(file_path, "rb") as source:
+        return source.read()
+
+
+def delete_stored_result_pdf(file_path):
+    if not file_path:
+        return
+
+    if file_path.startswith("r2://"):
+        remainder = file_path[5:]
+        bucket, separator, key = remainder.partition("/")
+        if not separator or not bucket or not key:
+            raise ValueError("Invalid result storage reference.")
+        _r2_client().delete_object(Bucket=bucket, Key=key)
+        return
+
+    root = Path(RESULTS_DIR).resolve()
+    candidate = Path(file_path).resolve()
+    if root in candidate.parents and candidate.is_file():
+        candidate.unlink()
+
+
 app = Flask(__name__)
 
 DB_PATH = str(Path(__file__).resolve().parent / 'msa_portal.db')
@@ -869,19 +962,21 @@ class MSAHandler(BaseHTTPRequestHandler):
 
             file_path = result["file_path"]
 
-            if not file_path or not os.path.exists(file_path):
-
+            try:
+                data = read_result_pdf(file_path)
+            except FileNotFoundError:
                 send_json(self, {
                     "ok": False,
                     "message": "Result file not found."
                 }, 404)
-
                 return
-
-
-            with open(file_path, "rb") as file:
-
-                data = file.read()
+            except Exception:
+                print("RESULT PDF READ ERROR: storage read failed")
+                send_json(self, {
+                    "ok": False,
+                    "message": "Could not retrieve the result PDF."
+                }, 503)
+                return
 
 
             self.send_response(200)
@@ -2515,18 +2610,12 @@ class MSAHandler(BaseHTTPRequestHandler):
                 conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
                 conn.commit()
 
-                # Remove the PDF only after the database deletion commits.
+                # Remove the stored PDF only after database deletion commits.
                 if file_path:
                     try:
-                        results_root = Path(RESULTS_DIR).resolve()
-                        candidate = Path(file_path).resolve()
-                        if (
-                            results_root in candidate.parents
-                            and candidate.is_file()
-                        ):
-                            candidate.unlink()
-                    except OSError as error:
-                        print("RESULT PDF CLEANUP WARNING:", error)
+                        delete_stored_result_pdf(file_path)
+                    except Exception:
+                        print("RESULT PDF CLEANUP WARNING: storage cleanup failed")
 
                 send_json(self, {"ok": True,
                     "message": "Result record deleted.",
@@ -2691,39 +2780,68 @@ class MSAHandler(BaseHTTPRequestHandler):
                     f"{file_name}"
                 )
 
-                file_path = os.path.join(
-                    RESULTS_DIR,
-                    safe_name
-                )
+                try:
+                    file_path = store_result_pdf(safe_name, file_bytes)
+                except Exception:
+                    print("RESULT PDF UPLOAD ERROR: storage write failed")
+                    conn.close()
+                    send_json(self, {
+                        "ok": False,
+                        "message": "Could not store the result PDF. Check storage configuration."
+                    }, 503)
+                    return
 
-                with open(
-                    file_path,
-                    "wb"
-                ) as file:
-                    file.write(file_bytes)
-
-                cursor = conn.execute("""
-                    INSERT INTO results
-                    (
+                try:
+                    cursor = conn.execute("""
+                        INSERT INTO results
+                        (
+                            student_id,
+                            academic_year,
+                            term,
+                            file_name,
+                            file_path,
+                            published
+                        )
+                        VALUES (?, ?, ?, ?, ?, 0)
+                    """, (
                         student_id,
                         academic_year,
                         term,
                         file_name,
-                        file_path,
-                        published
-                    )
-                    VALUES (?, ?, ?, ?, ?, 0)
-                """, (
-                    student_id,
-                    academic_year,
-                    term,
-                    file_name,
-                    file_path
-                ))
+                        file_path
+                    ))
 
-                result_id = cursor.lastrowid
+                    result_id = cursor.lastrowid
+                    conn.commit()
 
-                conn.commit()
+                except Exception:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+
+                    try:
+                        delete_stored_result_pdf(file_path)
+                    except Exception:
+                        print(
+                            "RESULT PDF CLEANUP WARNING: "
+                            "failed upload cleanup"
+                        )
+
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+                    send_json(self, {
+                        "ok": False,
+                        "message": (
+                            "Could not save the result record. "
+                            "Please try again."
+                        )
+                    }, 500)
+                    return
+
                 conn.close()
 
 
