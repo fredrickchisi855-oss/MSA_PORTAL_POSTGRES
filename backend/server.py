@@ -2586,8 +2586,6 @@ class MSAHandler(BaseHTTPRequestHandler):
                     data["term"]
                 )
 
-                import re
-
                 file_name = os.path.basename(
                     str(data["file_name"]).strip()
                 )
