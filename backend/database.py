@@ -58,11 +58,20 @@ def initialize_database():
             file_name TEXT,
             file_path TEXT,
             published INTEGER NOT NULL DEFAULT 0,
+            pdf_data BLOB,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (student_id) REFERENCES students(id)
         )
     """)
+
+    # Upgrade existing SQLite development databases safely.
+    result_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(results)").fetchall()
+    }
+    if "pdf_data" not in result_columns:
+        conn.execute("ALTER TABLE results ADD COLUMN pdf_data BLOB")
 
     # Create initial academic years from 2026 onward.
     for year in range(2026, 2031):

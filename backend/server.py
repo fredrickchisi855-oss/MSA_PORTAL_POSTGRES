@@ -19,52 +19,13 @@ import secrets
 
 
 
-# Cloudflare R2 storage for result PDFs.
-def _r2_configured():
-    names = (
-        "MSA_R2_ACCOUNT_ID",
-        "MSA_R2_ACCESS_KEY_ID",
-        "MSA_R2_SECRET_ACCESS_KEY",
-        "MSA_R2_BUCKET",
-    )
-    return all(os.environ.get(name) for name in names)
-
-
-def _r2_client():
-    import boto3
-
-    account_id = os.environ["MSA_R2_ACCOUNT_ID"]
-    return boto3.client(
-        "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=os.environ["MSA_R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["MSA_R2_SECRET_ACCESS_KEY"],
-        region_name="auto",
-    )
-
-
-def _is_render():
-    return bool(
-        os.environ.get("RENDER_EXTERNAL_URL")
-        or os.environ.get("RENDER_SERVICE_ID")
-        or os.environ.get("RENDER") == "true"
-    )
-
+# Persistent result PDF storage.
+# On PostgreSQL deployments, PDFs are stored in the results.pdf_data
+# BYTEA column. Local development can continue using local files.
 
 def store_result_pdf(filename, pdf_bytes):
-    if _r2_configured():
-        bucket = os.environ["MSA_R2_BUCKET"]
-        key = "results/" + filename
-        _r2_client().put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=pdf_bytes,
-            ContentType="application/pdf",
-        )
-        return "r2://" + bucket + "/" + key
-
-    if _is_render():
-        raise RuntimeError("Cloudflare R2 storage is not configured.")
+    if os.environ.get("DATABASE_URL", "").strip():
+        return "neon://database"
 
     local_path = os.path.join(RESULTS_DIR, filename)
     with open(local_path, "wb") as output:
@@ -72,18 +33,18 @@ def store_result_pdf(filename, pdf_bytes):
     return local_path
 
 
-def read_result_pdf(file_path):
-    if file_path and file_path.startswith("r2://"):
-        remainder = file_path[5:]
-        bucket, separator, key = remainder.partition("/")
-        if not separator or not bucket or not key:
-            raise FileNotFoundError("Invalid result storage reference.")
+def read_result_pdf(file_path, pdf_data=None):
+    if pdf_data is not None:
+        return bytes(pdf_data)
 
-        response = _r2_client().get_object(Bucket=bucket, Key=key)
-        try:
-            return response["Body"].read()
-        finally:
-            response["Body"].close()
+    if file_path == "neon://database":
+        raise FileNotFoundError("PDF data is missing from Neon.")
+
+    # Old R2 references cannot be retrieved after removing R2 support.
+    if file_path and file_path.startswith("r2://"):
+        raise FileNotFoundError(
+            "This result uses the retired R2 storage location."
+        )
 
     if not file_path or not os.path.isfile(file_path):
         raise FileNotFoundError("Result PDF is missing.")
@@ -93,19 +54,16 @@ def read_result_pdf(file_path):
 
 
 def delete_stored_result_pdf(file_path):
-    if not file_path:
+    if not file_path or file_path == "neon://database":
         return
 
+    # Do not attempt to delete old R2 objects.
     if file_path.startswith("r2://"):
-        remainder = file_path[5:]
-        bucket, separator, key = remainder.partition("/")
-        if not separator or not bucket or not key:
-            raise ValueError("Invalid result storage reference.")
-        _r2_client().delete_object(Bucket=bucket, Key=key)
         return
 
     root = Path(RESULTS_DIR).resolve()
     candidate = Path(file_path).resolve()
+
     if root in candidate.parents and candidate.is_file():
         candidate.unlink()
 
@@ -963,7 +921,7 @@ class MSAHandler(BaseHTTPRequestHandler):
             file_path = result["file_path"]
 
             try:
-                data = read_result_pdf(file_path)
+                data = read_result_pdf(file_path, result["pdf_data"])
             except FileNotFoundError:
                 send_json(self, {
                     "ok": False,
@@ -2818,15 +2776,17 @@ class MSAHandler(BaseHTTPRequestHandler):
                             term,
                             file_name,
                             file_path,
-                            published
+                            published,
+                            pdf_data
                         )
-                        VALUES (?, ?, ?, ?, ?, 0)
+                        VALUES (?, ?, ?, ?, ?, 0, ?)
                     """, (
                         student_id,
                         academic_year,
                         term,
                         file_name,
-                        file_path
+                        file_path,
+                        file_bytes if file_path == "neon://database" else None
                     ))
 
                     result_id = cursor.lastrowid

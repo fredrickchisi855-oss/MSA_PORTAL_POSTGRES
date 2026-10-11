@@ -34,6 +34,7 @@ def apply_postgres_migrations():
     files = [
         MIGRATIONS_DIR / "001_create_announcements.sql",
         MIGRATIONS_DIR / "002_create_core_schema.sql",
+        MIGRATIONS_DIR / "003_add_result_pdf_data.sql",
     ]
 
     for path in files:
