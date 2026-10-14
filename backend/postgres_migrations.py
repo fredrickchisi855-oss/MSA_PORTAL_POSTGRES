@@ -16,6 +16,9 @@ REQUIRED_TABLES = {
     "student_login_security",
     "password_reset_attempts",
     "announcements",
+    "student_registrations",
+    "msa_annual_promotion_settings",
+    "msa_annual_promotion_runs",
 }
 
 
@@ -35,6 +38,8 @@ def apply_postgres_migrations():
         MIGRATIONS_DIR / "001_create_announcements.sql",
         MIGRATIONS_DIR / "002_create_core_schema.sql",
         MIGRATIONS_DIR / "003_add_result_pdf_data.sql",
+        MIGRATIONS_DIR / "004_student_registrations.sql",
+        MIGRATIONS_DIR / "005_annual_promotion.sql",
     ]
 
     for path in files:

@@ -827,6 +827,22 @@ function renderAdminDashboard() {
                         <small>Manage academic years</small>
                     </button>
 
+                <button type="button" class="dashboard-menu-card"
+                    onclick="showStudentRegistrationManagementScreen()">
+                    <span class="dashboard-menu-icon">📝</span>
+                    <strong>Student Registration Management</strong>
+                    <small>Review and approve student registrations</small>
+                </button>
+
+                    <button type="button" class="dashboard-menu-card"
+                        onclick="showAnnualPromotionScreen()">
+                        <span class="dashboard-menu-icon">🎓</span>
+                        <strong>Annual Form Promotion</strong>
+                        <small>View yearly promotion settings and history</small>
+                    </button>
+
+
+
                 </div>
 
                 <div id="adminContent"></div>
@@ -1002,6 +1018,22 @@ function renderMainAdminDashboard() {
                         <strong>Academic Management</strong>
                         <small>Manage academic years</small>
                     </button>
+
+                <button type="button" class="dashboard-menu-card"
+                    onclick="showStudentRegistrationManagementScreen()">
+                    <span class="dashboard-menu-icon">📝</span>
+                    <strong>Student Registration Management</strong>
+                    <small>Review and approve student registrations</small>
+                </button>
+
+                    <button type="button" class="dashboard-menu-card"
+                        onclick="showAnnualPromotionScreen()">
+                        <span class="dashboard-menu-icon">🎓</span>
+                        <strong>Annual Form Promotion</strong>
+                        <small>View yearly promotion settings and history</small>
+                    </button>
+
+
 
                 </div>
 
@@ -3868,6 +3900,106 @@ async function viewPasswordResetRequest(requestId) {
    DASHBOARD SECTION SCREENS
    ========================================================= */
 
+
+function showStudentRegistrationManagementScreen() {
+    showAdminSectionScreen(
+        "Student Registration Management",
+        "Review registrations that need administrator attention.",
+        `<div class="registration-management">
+            <div class="registration-management-actions">
+                <button type="button" onclick="loadStudentRegistrationQueue()">
+                    REFRESH REGISTRATIONS
+                </button>
+            </div>
+            <p id="registrationManagementStatus">Loading registrations...</p>
+            <div id="registrationManagementList"></div>
+        </div>`
+    );
+    loadStudentRegistrationQueue();
+}
+
+async function loadStudentRegistrationQueue() {
+    const status = document.getElementById("registrationManagementStatus");
+    const list = document.getElementById("registrationManagementList");
+    if (!status || !list) return;
+
+    status.textContent = "Loading registrations...";
+    list.innerHTML = "";
+
+    try {
+        const response = await fetch("/api/admin/student-registrations");
+        const result = await response.json();
+
+        if (!response.ok || !result.ok) {
+            throw new Error(result.message || "Unable to load registrations.");
+        }
+
+        const registrations = Array.isArray(result.registrations)
+            ? result.registrations : [];
+
+        if (!registrations.length) {
+            status.textContent = "There are no pending registrations.";
+            return;
+        }
+
+        status.textContent = registrations.length + " pending registration(s).";
+
+        list.innerHTML = registrations.map(item => `
+            <article class="registration-review-card">
+                <h3>${escapeHtml(item.full_name || "")}</h3>
+                <p><strong>Form:</strong> ${escapeHtml(String(item.form ?? ""))}</p>
+                <p><strong>Class/stream:</strong> ${escapeHtml(item.class_name || "")}</p>
+                <p><strong>Reason for review:</strong>
+                    ${escapeHtml(item.review_reason || "Administrator review required")}</p>
+                <p><strong>Submitted:</strong> ${escapeHtml(item.created_at || "")}</p>
+                <div class="registration-review-actions">
+                    <button type="button"
+                        onclick="reviewStudentRegistration(${Number(item.id)}, 'approve')">
+                        APPROVE AS NEW STUDENT
+                    </button>
+                    <button type="button"
+                        onclick="reviewStudentRegistration(${Number(item.id)}, 'reject')">
+                        REJECT
+                    </button>
+                </div>
+            </article>
+        `).join("");
+    } catch (error) {
+        status.textContent = error.message || "Unable to load registrations.";
+    }
+}
+
+async function reviewStudentRegistration(id, action) {
+    if (!Number.isInteger(id) || id <= 0) {
+        alert("Invalid registration.");
+        return;
+    }
+
+    const message = action === "approve"
+        ? "Approve this registration as a NEW student account?"
+        : "Reject this student registration?";
+
+    if (!confirm(message)) return;
+
+    try {
+        const response = await fetch(
+            "/api/admin/student-registrations/" + id + "/" + action,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+        );
+        const result = await response.json();
+
+        if (!response.ok || !result.ok) {
+            throw new Error(result.message || "The registration could not be processed.");
+        }
+
+        alert(result.message + (result.student_id_code
+            ? "\nStudent ID: " + result.student_id_code : ""));
+        await loadStudentRegistrationQueue();
+    } catch (error) {
+        alert(error.message || "Unable to process registration.");
+    }
+}
+
 function showAdminSectionScreen(title, subtitle, content) {
     const dashboardMain = document.querySelector("main");
 
@@ -3991,6 +4123,15 @@ function showResultsManagementScreen() {
                     <span>📄</span>
                     <strong>Upload Results</strong>
                     <small>Add examination results</small>
+                </button>
+
+                <button
+                    type="button"
+                    class="section-action-card"
+                    onclick="showAllPdfUploads()">
+                    <span>📚</span>
+                    <strong>All PDF Uploads</strong>
+                    <small>Match and upload multiple student PDFs</small>
                 </button>
 
                 <button
@@ -4218,6 +4359,13 @@ async function showMainAdminPanel() {
                                                 CHANGE PASSWORD
                                             </button>
 
+                                            <button
+                                                type="button"
+                                                onclick="mainAdminRemove(${Number(admin.id)})"
+                                                class="disable-button">
+                                                REMOVE ADMINISTRATOR
+                                            </button>
+
                                         </div>
                                     `
                                 }
@@ -4230,6 +4378,13 @@ async function showMainAdminPanel() {
             </div>
 
             <div class="main-admin-screen-actions">
+
+                <button
+                    type="button"
+                    onclick="mainAdminAdd()"
+                    class="enable-button">
+                    ➕ ADD ADMINISTRATOR
+                </button>
 
                 <button
                     type="button"
@@ -4470,7 +4625,114 @@ async function mainAdminChangePassword(id) {
 
 
 /* Make the function available to the existing dashboard buttons. */
+
+async function mainAdminAdd() {
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+    if (!token) {
+        alert("Administrator login required.");
+        return;
+    }
+
+    const displayName = prompt("Enter the new administrator's display name:");
+    if (displayName === null) return;
+    if (!displayName.trim()) {
+        alert("Display name cannot be empty.");
+        return;
+    }
+
+    const username = prompt("Enter a unique username:");
+    if (username === null) return;
+    if (!username.trim()) {
+        alert("Username cannot be empty.");
+        return;
+    }
+
+    const password = prompt("Create a password (at least 8 characters):");
+    if (password === null) return;
+    if (password.length < 8) {
+        alert("Password must contain at least 8 characters.");
+        return;
+    }
+
+    const confirmPassword = prompt("Confirm the password:");
+    if (confirmPassword === null) return;
+    if (password !== confirmPassword) {
+        alert("Passwords do not match.");
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/admin/users", {
+            method: "POST",
+            headers: {
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                display_name: displayName.trim(),
+                username: username.trim(),
+                password: password
+            })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            alert(data.message || "Unable to create administrator.");
+            return;
+        }
+
+        alert(data.message || "Administrator created successfully.");
+        await showMainAdminPanel();
+    } catch (error) {
+        console.error("MAIN ADMIN ADD ERROR:", error);
+        alert("Unable to connect to the server.");
+    }
+}
+
+async function mainAdminRemove(id) {
+    const token = localStorage.getItem("MSA_ADMIN_TOKEN");
+    if (!token) {
+        alert("Administrator login required.");
+        return;
+    }
+
+    if (!confirm(
+        "Remove this administrator account?\\n\\n" +
+        "This cannot be undone. Student records, results and PDFs will not be deleted."
+    )) {
+        return;
+    }
+
+    try {
+        const response = await fetch(
+            "/api/admin/users/" + encodeURIComponent(id) + "/remove",
+            {
+                method: "POST",
+                headers: {
+                    "Authorization": "Bearer " + token,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({})
+            }
+        );
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+            alert(data.message || "Unable to remove administrator.");
+            return;
+        }
+
+        alert(data.message || "Administrator removed successfully.");
+        await showMainAdminPanel();
+    } catch (error) {
+        console.error("MAIN ADMIN REMOVE ERROR:", error);
+        alert("Unable to connect to the server.");
+    }
+}
+
 window.showMainAdminPanel = showMainAdminPanel;
+window.mainAdminAdd = mainAdminAdd;
+window.mainAdminRemove = mainAdminRemove;
 window.mainAdminToggle = mainAdminToggle;
 window.mainAdminEdit = mainAdminEdit;
 window.mainAdminChangePassword = mainAdminChangePassword;
@@ -4977,5 +5239,1145 @@ async function msaDisableAnnouncement(id) {
         await msaLoadAdminAnnouncements();
     } catch (error) {
         alert(error.message || "Unable to disable announcement.");
+    }
+}
+
+
+
+
+/* =========================================================
+   ALL PDF UPLOADS — ADDITIVE FEATURE
+   Uses the existing /api/results upload endpoint.
+   Uploaded results remain unpublished until explicitly
+   published from this batch screen.
+   ========================================================= */
+
+window.msaBatchPdfItems = window.msaBatchPdfItems || [];
+window.msaBatchPendingResultIds =
+    window.msaBatchPendingResultIds || [];
+
+function msaBatchNormalizeName(value) {
+    return String(value || "")
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]/g, "");
+}
+
+function showAllPdfUploads() {
+    const content = document.getElementById("adminContent");
+    if (!content) return;
+
+    content.innerHTML = `
+        <div class="admin-panel">
+            <button type="button"
+                class="admin-button"
+                onclick="showResultsManagementScreen()">
+                ← Back to Results Management
+            </button>
+
+            <h2>All PDF Uploads</h2>
+            <p>Select multiple student result PDFs. Filenames are
+            matched against registered student names.</p>
+
+            <label>Academic Year</label>
+            <select id="allPdfYear" class="admin-select">
+                ${getAcademicYearOptions()}
+            </select>
+
+            <label>Term</label>
+            <select id="allPdfTerm" class="admin-select">
+                <option value="Term 1">Term 1</option>
+                <option value="Term 2">Term 2</option>
+                <option value="Term 3">Term 3</option>
+            </select>
+
+            <label>Select PDF files</label>
+            <input id="allPdfFiles"
+                type="file"
+                accept=".pdf,application/pdf"
+                multiple
+                class="admin-input"
+                onchange="prepareAllPdfUploads()">
+
+            <p><small>Each PDF must be 10 MiB or smaller.
+            Uploading does not publish results.</small></p>
+
+            <div id="allPdfReview"></div>
+
+            <button type="button"
+                class="admin-button"
+                onclick="uploadAllPdfBatch()">
+                Upload Matched PDFs
+            </button>
+
+            <button type="button"
+                class="admin-button"
+                onclick="publishAllPdfBatch()">
+                Publish Uploaded Batch
+            </button>
+
+            <p id="allPdfMessage" role="status"></p>
+        </div>
+    `;
+
+    renderAllPdfBatchReview();
+}
+
+function prepareAllPdfUploads() {
+    const input = document.getElementById("allPdfFiles");
+    if (!input) return;
+
+    const files = Array.from(input.files || []);
+    const registered = Array.isArray(students) ? students : [];
+
+    window.msaBatchPdfItems = files.map(file => {
+        const stem = file.name.replace(/\.pdf$/i, "");
+        const normalizedFile = msaBatchNormalizeName(stem);
+
+        const named = registered.filter(student => {
+            const name = msaBatchNormalizeName(student.name);
+            return name && normalizedFile.includes(name);
+        });
+
+        const exact = named.filter(student =>
+            msaBatchNormalizeName(student.name) === normalizedFile
+        );
+
+        const candidates = exact.length ? exact : named;
+
+        return {
+            file,
+            studentId: candidates.length === 1
+                ? String(candidates[0].id)
+                : "",
+            uploaded: false,
+            candidates: candidates.map(student => student.id)
+        };
+    });
+
+    renderAllPdfBatchReview();
+}
+
+function setBatchPdfStudent(index, studentId) {
+    const item = window.msaBatchPdfItems[index];
+    if (!item) return;
+    item.studentId = String(studentId || "");
+    renderAllPdfBatchReview();
+}
+
+function renderAllPdfBatchReview() {
+    const area = document.getElementById("allPdfReview");
+    if (!area) return;
+
+    const items = window.msaBatchPdfItems || [];
+    const registered = Array.isArray(students) ? students : [];
+
+    if (!items.length) {
+        area.innerHTML = "<p>No PDFs selected yet.</p>";
+        return;
+    }
+
+    area.innerHTML = `
+        <h3>Review files (${items.length})</h3>
+        ${items.map((item, index) => {
+            const options = registered.map(student => `
+                <option value="${escapeHtml(String(student.id))}"
+                    ${String(item.studentId) === String(student.id)
+                        ? "selected" : ""}>
+                    ${escapeHtml(student.name)}
+                    — Form ${escapeHtml(String(
+                        student.form || student.class_name || "?"
+                    ))}
+                </option>
+            `).join("");
+
+            const student = registered.find(s =>
+                String(s.id) === String(item.studentId)
+            );
+
+            let status = item.uploaded
+                ? "Uploaded — not necessarily published"
+                : student ? "Matched — ready for review" :
+                "Needs manual matching";
+
+            if (item.file.size > 10 * 1024 * 1024) {
+                status = "Too large — maximum 10 MiB";
+            }
+
+            return `
+                <div class="admin-panel">
+                    <p><strong>${escapeHtml(item.file.name)}</strong></p>
+                    <p>${escapeHtml(status)}</p>
+                    <label>Student</label>
+                    <select class="admin-select"
+                        ${item.uploaded ? "disabled" : ""}
+                        onchange="setBatchPdfStudent(${index}, this.value)">
+                        <option value="">Choose student</option>
+                        ${options}
+                    </select>
+                </div>
+            `;
+        }).join("")}
+        <p>Review every match carefully before uploading.</p>
+    `;
+}
+
+function msaReadPdfAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = () => {
+            const result = String(reader.result || "");
+            const comma = result.indexOf(",");
+            if (comma < 0) {
+                reject(new Error("Could not read " + file.name));
+                return;
+            }
+            resolve(result.slice(comma + 1));
+        };
+
+        reader.onerror = () =>
+            reject(new Error("Could not read " + file.name));
+
+        reader.readAsDataURL(file);
+    });
+}
+
+async function uploadAllPdfBatch() {
+    const items = window.msaBatchPdfItems || [];
+    const year = document.getElementById("allPdfYear");
+    const term = document.getElementById("allPdfTerm");
+    const message = document.getElementById("allPdfMessage");
+
+    if (!year || !term || !message) return;
+
+    const pending = items.filter(item => !item.uploaded);
+
+    if (!pending.length) {
+        message.textContent = "There are no new PDFs to upload.";
+        return;
+    }
+
+    if (pending.some(item =>
+        !item.studentId ||
+        item.file.size > 10 * 1024 * 1024 ||
+        !/\.pdf$/i.test(item.file.name)
+    )) {
+        message.textContent =
+            "Resolve unmatched files and remove invalid or oversized PDFs.";
+        return;
+    }
+
+    const ids = pending.map(item => item.studentId);
+    if (new Set(ids).size !== ids.length) {
+        message.textContent =
+            "A student is selected more than once. Check the matches first.";
+        return;
+    }
+
+    if (!confirm(
+        "Upload " + pending.length +
+        " PDFs for " + year.value + ", " + term.value +
+        " as UNPUBLISHED results?"
+    )) return;
+
+    let success = 0;
+    const failures = [];
+
+    for (const item of pending) {
+        try {
+            const base64 = await msaReadPdfAsBase64(item.file);
+
+            const response = await fetch("/api/results", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    student_id: Number(item.studentId),
+                    academic_year: Number(year.value),
+                    term: term.value,
+                    file_name: item.file.name,
+                    file_data: base64
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.ok) {
+                failures.push(item.file.name + ": " +
+                    (data.message || "Upload failed"));
+                continue;
+            }
+
+            item.uploaded = true;
+            success++;
+
+            if (data.result_id != null) {
+                window.msaBatchPendingResultIds.push(
+                    Number(data.result_id)
+                );
+            }
+        } catch (error) {
+            failures.push(item.file.name + ": " + error.message);
+        }
+    }
+
+    renderAllPdfBatchReview();
+
+    message.textContent =
+        success + " PDF(s) uploaded as unpublished results. " +
+        failures.length + " failed.";
+
+    if (failures.length) {
+        alert("Upload report:\n" + failures.join("\n"));
+    }
+
+    if (typeof loadResults === "function") await loadResults();
+    if (typeof loadStats === "function") loadStats();
+}
+
+async function publishAllPdfBatch() {
+    const ids = [...new Set(
+        (window.msaBatchPendingResultIds || [])
+            .map(Number)
+            .filter(id => Number.isInteger(id) && id > 0)
+    )];
+
+    const message = document.getElementById("allPdfMessage");
+    if (!ids.length) {
+        if (message) message.textContent =
+            "No uploaded batch result IDs are waiting to be published.";
+        return;
+    }
+
+    if (!confirm(
+        "Publish only these " + ids.length +
+        " result(s) from this batch? This makes them available to students."
+    )) return;
+
+    let published = 0;
+    const failed = [];
+
+    for (const id of ids) {
+        try {
+            const response = await fetch(
+                "/api/results/" + id + "/publish",
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: "{}"
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok || !data.ok) {
+                failed.push(id + ": " +
+                    (data.message || "Publish failed"));
+                continue;
+            }
+
+            published++;
+            window.msaBatchPendingResultIds =
+                window.msaBatchPendingResultIds.filter(
+                    pendingId => Number(pendingId) !== id
+                );
+        } catch (error) {
+            failed.push(id + ": " + error.message);
+        }
+    }
+
+    if (message) {
+        message.textContent = published +
+            " result(s) published. " + failed.length +
+            " failed; failed IDs remain available for retry.";
+    }
+
+    if (failed.length) {
+        alert("Publishing report:\n" + failed.join("\n"));
+    }
+
+    if (typeof loadResults === "function") await loadResults();
+    if (typeof loadStats === "function") loadStats();
+}
+
+
+
+/* MSA FULL-SCREEN CHILD NAVIGATION */
+
+
+/* MSA FULL-SCREEN CHILD NAVIGATION
+   Opens dashboard-card actions in a standalone screen.
+   Keeps existing feature functions and data requests intact.
+*/
+(function installMsaFullScreenNavigation() {
+    if (window.msaFullScreenNavigationInstalled) return;
+    window.msaFullScreenNavigationInstalled = true;
+
+    window.msaOpenStandaloneFeature = function(title, feature, parent) {
+        const main = document.querySelector("main");
+        if (!main || typeof feature !== "function") {
+            alert("Unable to open this screen.");
+            return;
+        }
+
+        window.msaCurrentFeatureParent = parent;
+
+        main.innerHTML = `
+            <section class="admin-section-screen">
+                <div class="admin-section-header">
+                    <div>
+                        <h2>${escapeHtml(title)}</h2>
+                        <p>Manage this section independently.</p>
+                    </div>
+                </div>
+
+                <div class="admin-section-content">
+                    <div id="adminContent"></div>
+                </div>
+
+                <button type="button"
+                    class="admin-section-back-button"
+                    onclick="msaReturnToFeatureParent()">
+                    ← BACK
+                </button>
+            </section>
+        `;
+
+        window.scrollTo({ top: 0, behavior: "smooth" });
+
+        try {
+            const result = feature();
+            if (result && typeof result.catch === "function") {
+                result.catch(error => {
+                    console.error("Could not open admin feature:", error);
+                });
+            }
+        } catch (error) {
+            console.error("Could not open admin feature:", error);
+            const content = document.getElementById("adminContent");
+            if (content) {
+                content.textContent =
+                    "This screen could not be loaded. Please return and try again.";
+            }
+        }
+    };
+
+    window.msaReturnToFeatureParent = function() {
+        const parent = window.msaCurrentFeatureParent;
+        if (typeof parent === "function") {
+            parent();
+        } else if (typeof showDashboard === "function") {
+            showDashboard();
+        }
+    };
+
+    document.addEventListener("click", function(event) {
+        const target = event.target;
+        if (!target || typeof target.closest !== "function") return;
+
+        const card = target.closest(
+            ".admin-section-screen .section-action-card"
+        );
+        if (!card) return;
+
+        const screen = card.closest(".admin-section-screen");
+        if (!screen || !screen.querySelector("#adminContent")) return;
+
+        const inlineAction = card.getAttribute("onclick") || "";
+        const match = inlineAction.match(
+            /^\s*([A-Za-z_$][\w$]*)\s*\(\s*\)\s*;?\s*$/
+        );
+        if (!match) return;
+
+        const feature = window[match[1]];
+        if (typeof feature !== "function") return;
+
+        const titleNode = card.querySelector("strong");
+        const title = titleNode
+            ? titleNode.textContent.trim()
+            : "Admin Feature";
+
+        const heading = screen.querySelector(".admin-section-header h2");
+        const headingText = heading
+            ? heading.textContent.toUpperCase()
+            : "";
+
+        let parent = null;
+
+        if (headingText.includes("RESULTS MANAGEMENT")) {
+            parent = window.showResultsManagementScreen;
+        } else if (headingText.includes("STUDENT MANAGEMENT")) {
+            parent = window.showStudentManagementScreen;
+        } else if (headingText.includes("ACADEMIC MANAGEMENT")) {
+            parent = window.showAcademicManagementScreen;
+        }
+
+        if (typeof parent !== "function") {
+            parent = window.showDashboard;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        window.msaOpenStandaloneFeature(title, feature, parent);
+    }, true);
+})();
+
+
+/* MSA_BATCH_STUDENT_DELETE_V1
+   Additive bulk student selection and deletion.
+   Existing individual student actions are preserved.
+*/
+(function installMsaBatchStudentDelete() {
+    if (window.msaBatchStudentDeleteInstalled) return;
+    window.msaBatchStudentDeleteInstalled = true;
+
+    window.msaSelectedStudentIds =
+        window.msaSelectedStudentIds instanceof Set
+            ? window.msaSelectedStudentIds
+            : new Set();
+
+    window.msaStudentBulkVisibleIds = [];
+
+    window.showStudents = function () {
+        const content = document.getElementById("adminContent");
+        if (!content) {
+            alert("Student Management screen was not found.");
+            return;
+        }
+
+        content.innerHTML = `
+            <div class="admin-panel">
+                <h2>Students</h2>
+
+                <input
+                    id="studentSearch"
+                    class="admin-input"
+                    placeholder="Search student name..."
+                    oninput="filterStudents()"
+                >
+
+                <!-- MSA_STUDENT_FORM_FILTER_SORT_V1 -->
+                <label for="studentFormFilter" style="display:block;margin:12px 0 6px;">
+                    FILTER BY FORM
+                </label>
+                <select
+                    id="studentFormFilter"
+                    class="admin-input"
+                    onchange="filterStudents()"
+                >
+                    <option value="" selected disabled>Select a form to view students</option>
+                    <option value="all">All Forms</option>
+                    <option value="1">Form 1</option>
+                    <option value="2">Form 2</option>
+                    <option value="3">Form 3</option>
+                    <option value="4">Form 4</option>
+                    <option value="5">Form 5</option>
+                    <option value="6">Form 6</option>
+                </select>
+
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0;">
+                    <button type="button" class="admin-button"
+                        onclick="selectVisibleStudents()">
+                        SELECT ALL VISIBLE
+                    </button>
+                    <button type="button" class="admin-button"
+                        onclick="deselectAllStudents()">
+                        DESELECT ALL
+                    </button>
+                    <button type="button" class="admin-button danger"
+                        id="deleteSelectedStudentsButton"
+                        onclick="deleteSelectedStudents()">
+                        DELETE SELECTED (0)
+                    </button>
+                </div>
+
+                <!-- MSA_FAST_BULK_FORM_CHANGE_V1 -->
+                <label for="bulkDestinationForm"
+                    style="display:block;margin:12px 0 6px;">
+                    CHANGE SELECTED STUDENTS TO FORM
+                </label>
+                <select id="bulkDestinationForm" class="admin-input">
+                    <option value="">Select destination form</option>
+                    <option value="1">Form 1</option>
+                    <option value="2">Form 2</option>
+                    <option value="3">Form 3</option>
+                    <option value="4">Form 4</option>
+                    <option value="5">Form 5</option>
+                    <option value="6">Form 6</option>
+                </select>
+                <button type="button" class="admin-button"
+                    id="changeSelectedStudentFormButton"
+                    onclick="changeSelectedStudentForm()" disabled>
+                    CHANGE FORM (0)
+                </button>
+
+                <p id="studentBulkSelectionCount" class="muted">
+                    Select students from the search results.
+                </p>
+
+                <div id="studentsList">
+                    Start typing a student name to search.
+                </div>
+            </div>
+        `;
+
+        window.msaStudentBulkVisibleIds = [];
+        filterStudents();
+        updateStudentBulkSelectionCount();
+    };
+
+    window.renderStudents = function (list) {
+        const container = document.getElementById("studentsList");
+        if (!container) return;
+
+        if (!Array.isArray(list)) {
+            const search = String(
+                document.getElementById("studentSearch")?.value || ""
+            ).trim().toLowerCase();
+
+            list = search
+                ? (Array.isArray(students) ? students : []).filter(student =>
+                    String(student.name || "").toLowerCase().includes(search)
+                  )
+                : [];
+        }
+
+        window.msaStudentBulkVisibleIds = list
+            .map(student => Number(student.id))
+            .filter(id => Number.isInteger(id) && id > 0);
+
+        if (list.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    No students to display. Search for a student by name.
+                </div>
+            `;
+            updateStudentBulkSelectionCount();
+            return;
+        }
+
+        container.innerHTML = list.map(student => {
+            const id = Number(student.id);
+            const status = String(student.status || "Active").trim();
+            const disabled = status.toLowerCase() === "disabled";
+            const checked = window.msaSelectedStudentIds.has(id)
+                ? "checked"
+                : "";
+
+            return `
+                <div class="student-row msa-student-row-layout">
+                    <label class="msa-student-identity">
+                        <input
+                            type="checkbox"
+                            data-student-bulk-id="${id}"
+                            ${checked}
+                            onchange="toggleStudentBulkSelection(${id}, this.checked)"
+                            aria-label="Select ${escapeHtml(student.name)}"
+                            class="msa-student-checkbox"
+                        >
+                        <span class="msa-student-information">
+                            <strong class="msa-student-full-name">${escapeHtml(student.name || "")}</strong>
+                            ${checked ? '<span class="msa-student-new-tag">NEW</span>' : ''}
+                            <span class="msa-student-id-badge">
+                                STUDENT ID: ${escapeHtml(student.student_id_code || "NOT ASSIGNED")}
+                            </span>
+                            <span class="muted msa-student-meta">
+                                Form ${escapeHtml(String(student.form ?? ""))}
+                                • ${escapeHtml(student.class_name || "")}
+                            </span>
+                            <span class="msa-student-status">
+                                Status: <strong>${escapeHtml(status)}</strong>
+                            </span>
+                        </span>
+                    </label>
+
+                    <div class="msa-student-actions">
+                        <button class="admin-button" type="button"
+                            onclick="editStudent(${id})">EDIT</button>
+
+                        <button class="admin-button" type="button"
+                            onclick="resetStudentPassword(${id})">RESET PASSWORD</button>
+
+                        <button class="admin-button" type="button"
+                            onclick="toggleStudentStatus(${id})">
+                            ${disabled ? "ACTIVATE" : "DISABLE"}
+                        </button>
+
+                        <button class="admin-button danger" type="button"
+                            onclick="deleteStudent(${id})">DELETE</button>
+                    </div>
+                </div>
+            `;
+        }).join("");
+
+        updateStudentBulkSelectionCount();
+    };
+
+    window.filterStudents = function () {
+        const search = String(
+            document.getElementById("studentSearch")?.value || ""
+        ).trim().toLocaleLowerCase();
+
+        const selectedForm = String(
+            document.getElementById("studentFormFilter")?.value ?? ""
+        );
+
+        // MSA_FORM_SELECTION_REQUIRED_V1
+        if (!selectedForm) {
+            window.msaStudentBulkVisibleIds = [];
+            const container = document.getElementById("studentsList");
+            if (container) {
+                container.innerHTML =
+                    '<p class="muted">Select a form to view students.</p>';
+            }
+            updateStudentBulkSelectionCount();
+            return;
+        }
+
+        const source = Array.isArray(students) ? students : [];
+
+        const filtered = source.filter(student => {
+            const nameMatches = String(student.name || "")
+                .toLocaleLowerCase()
+                .includes(search);
+
+            const studentForm = String(student.form ?? "").trim();
+            const formMatches =
+                selectedForm === "all" || studentForm === selectedForm;
+
+            return nameMatches && formMatches;
+        });
+
+        filtered.sort((a, b) =>
+            String(a.name || "").localeCompare(
+                String(b.name || ""),
+                undefined,
+                { sensitivity: "base" }
+            )
+        );
+
+        window.renderStudents(filtered);
+    };
+
+    window.toggleStudentBulkSelection = function (id, checked) {
+        id = Number(id);
+        if (!Number.isInteger(id) || id <= 0) return;
+
+        if (checked) {
+            window.msaSelectedStudentIds.add(id);
+        } else {
+            window.msaSelectedStudentIds.delete(id);
+        }
+
+        // Re-render so the NEW tag updates immediately.
+        window.filterStudents();
+        updateStudentBulkSelectionCount();
+    };
+
+    window.selectVisibleStudents = function () {
+        window.msaStudentBulkVisibleIds.forEach(id => {
+            window.msaSelectedStudentIds.add(Number(id));
+        });
+
+        window.filterStudents();
+    };
+
+    window.deselectAllStudents = function () {
+        window.msaSelectedStudentIds.clear();
+
+        window.filterStudents();
+        updateStudentBulkSelectionCount();
+    };
+
+    window.updateStudentBulkSelectionCount = function () {
+        const count = window.msaSelectedStudentIds.size;
+        const button = document.getElementById("deleteSelectedStudentsButton");
+        const label = document.getElementById("studentBulkSelectionCount");
+
+        if (button) {
+            button.textContent = `DELETE SELECTED (${count})`;
+            button.disabled = count === 0;
+        }
+
+        const changeButton =
+            document.getElementById("changeSelectedStudentFormButton");
+        if (changeButton) {
+            changeButton.textContent = `CHANGE FORM (${count})`;
+            changeButton.disabled = count === 0;
+        }
+
+        if (label) {
+            label.textContent =
+                `${count} student(s) selected. ` +
+                "Select All Visible applies only to the current search results.";
+        }
+    };
+
+    window.changeSelectedStudentForm = async function () {
+        const ids = Array.from(window.msaSelectedStudentIds)
+            .map(Number)
+            .filter(id => Number.isInteger(id) && id > 0);
+
+        const destination = String(
+            document.getElementById("bulkDestinationForm")?.value || ""
+        );
+
+        const currentForm = String(
+            document.getElementById("studentFormFilter")?.value || ""
+        );
+
+        if (!currentForm) {
+            alert("Select a form first, then search and select students.");
+            return;
+        }
+        if (!ids.length) {
+            alert("Select at least one student first.");
+            return;
+        }
+        if (!/^[1-6]$/.test(destination)) {
+            alert("Choose a destination form from Form 1 to Form 6.");
+            return;
+        }
+
+        const allStudents = Array.isArray(students) ? students : [];
+        const selected = ids.map(id =>
+            allStudents.find(student => Number(student.id) === id)
+        );
+
+        if (selected.some(student => !student)) {
+            alert("Some selected students could not be found. Refresh and try again.");
+            return;
+        }
+
+        if (currentForm !== "all" &&
+            selected.some(student => String(student.form ?? "").trim() !== currentForm)) {
+            alert(
+                "Your selection includes students from another form. " +
+                "Select one form and choose students from that form only."
+            );
+            return;
+        }
+
+        const changes = selected.filter(
+            student => String(student.form ?? "").trim() !== destination
+        );
+
+        if (!changes.length) {
+            alert("All selected students are already in Form " + destination + ".");
+            return;
+        }
+
+        const summary = changes.map(student =>
+            `• ${student.name}: Form ${student.form} → Form ${destination}`
+        ).join("\n");
+
+        if (!confirm(
+            `CONFIRM BULK FORM CHANGE\n\n${summary}\n\n` +
+            "Student IDs, passwords/PINs and previous results will be kept.\n" +
+            "Continue?"
+        )) return;
+
+        const button = document.getElementById("changeSelectedStudentFormButton");
+        if (button) {
+            button.disabled = true;
+            button.textContent = "UPDATING...";
+        }
+
+        let updated = 0;
+        const failures = [];
+
+        try {
+            for (const student of changes) {
+                try {
+                    const response = await fetch(API + "/students/update", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            student_id: Number(student.id),
+                            name: String(student.name || "").trim(),
+                            form: Number(destination),
+                            class_name: String(student.class_name || "").trim() ||
+                                `Form ${destination}`
+                        })
+                    });
+
+                    let result = {};
+                    try { result = await response.json(); } catch (_) {}
+
+                    if (!response.ok || !result.ok) {
+                        failures.push(
+                            `${student.name}: ${result.message || "Update failed"}`
+                        );
+                        continue;
+                    }
+
+                    updated++;
+                    window.msaSelectedStudentIds.delete(Number(student.id));
+                } catch (_) {
+                    failures.push(`${student.name}: connection error`);
+                }
+            }
+
+            await loadStudents();
+            window.filterStudents();
+
+            let message = `Bulk form change finished.\n\nUpdated: ${updated}\nFailed: ${failures.length}`;
+            if (failures.length) {
+                message += "\n\nUnsuccessful updates:\n" +
+                    failures.slice(0, 10).join("\n");
+                if (failures.length > 10) {
+                    message += `\n…and ${failures.length - 10} more.`;
+                }
+            }
+            alert(message);
+        } catch (error) {
+            console.error("Bulk form change error:", error);
+            alert(
+                "The refresh failed after the update attempt. " +
+                "Reload Student Management and verify the students' forms."
+            );
+        } finally {
+            updateStudentBulkSelectionCount();
+        }
+    };
+
+    window.deleteSelectedStudents = async function () {
+        const ids = Array.from(window.msaSelectedStudentIds);
+        if (ids.length === 0) {
+            alert("Select at least one student first.");
+            return;
+        }
+
+        const selectedStudents = ids.map(id =>
+            (Array.isArray(students) ? students : []).find(
+                student => Number(student.id) === id
+            )
+        ).filter(Boolean);
+
+        if (selectedStudents.length !== ids.length) {
+            alert(
+                "Some selected students could not be found in the current list. " +
+                "Refresh the student list before continuing."
+            );
+            return;
+        }
+
+        const names = selectedStudents
+            .map(student => `• ${student.name} (Form ${student.form})`)
+            .join("\n");
+
+        const confirmed = confirm(
+            `CONFIRM BULK STUDENT DELETION\n\n` +
+            `You selected ${ids.length} student(s):\n\n${names}\n\n` +
+            "Students with result records will NOT be deleted. Their results " +
+            "and PDF history will be preserved. Disable those students instead.\n\n" +
+            "Students without result records can still be permanently deleted.\n\n" +
+            "Continue?"
+        );
+
+        if (!confirmed) return;
+
+        const button = document.getElementById("deleteSelectedStudentsButton");
+        if (button) {
+            button.disabled = true;
+            button.textContent = "DELETING...";
+        }
+
+        let deleted = 0;
+        const failures = [];
+
+        try {
+            for (const student of selectedStudents) {
+                try {
+                    const response = await fetch(API + "/students/delete", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            student_id: Number(student.id)
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (!response.ok || !data.ok) {
+                        failures.push(
+                            `${student.name}: ${data.message || "Deletion failed"}`
+                        );
+                        continue;
+                    }
+
+                    deleted++;
+                    window.msaSelectedStudentIds.delete(Number(student.id));
+                } catch (error) {
+                    failures.push(`${student.name}: connection error`);
+                }
+            }
+
+            await loadStudents();
+
+            const search = document.getElementById("studentSearch");
+            if (search) {
+                window.filterStudents();
+            }
+
+            let message = `Bulk deletion finished.\n\nDeleted: ${deleted}\nFailed: ${failures.length}`;
+
+            if (failures.some(item =>
+                /result records|result history|disable the student/i.test(item)
+            )) {
+                message +=
+                    "\n\nSome students were protected because they have results. " +
+                    "Their records were preserved. Disable those students instead.";
+            }
+
+            if (failures.length) {
+                message += "\n\nFailed items:\n" + failures.slice(0, 10).join("\n");
+                if (failures.length > 10) {
+                    message += `\n…and ${failures.length - 10} more.`;
+                }
+            }
+
+            alert(message);
+        } catch (error) {
+            console.error("Bulk student deletion error:", error);
+            alert(
+                `Deletion process stopped.\nDeleted before stopping: ${deleted}\n` +
+                "Please refresh Student Management and check the remaining students."
+            );
+        } finally {
+            updateStudentBulkSelectionCount();
+        }
+    };
+})();
+
+/* MSA_STUDENT_LIST_LAYOUT_SORT_FIX_V1 */
+(function () {
+    const previousRenderStudents = window.renderStudents;
+    if (typeof previousRenderStudents !== "function") {
+        console.error("MSA layout fix: renderStudents was not found.");
+        return;
+    }
+
+    window.renderStudents = function (list) {
+        if (!Array.isArray(list)) {
+            return previousRenderStudents.apply(this, arguments);
+        }
+
+        const sorted = [...list].sort((a, b) => {
+            const nameA = String(
+                a.name || a.full_name || a.student_name || ""
+            ).trim();
+
+            const nameB = String(
+                b.name || b.full_name || b.student_name || ""
+            ).trim();
+
+            return nameA.localeCompare(nameB, undefined, {
+                sensitivity: "base",
+                numeric: true
+            });
+        });
+
+        return previousRenderStudents.call(this, sorted);
+    };
+})();
+
+
+// MSA PORTAL: Annual Form Promotion screen.
+async function showAnnualPromotionScreen() {
+    let data;
+    try {
+        const token = localStorage.getItem("MSA_ADMIN_TOKEN") || "";
+        const response = await fetch("/api/admin/annual-promotion", {
+            headers: { "Authorization": "Bearer " + token }
+        });
+        data = await response.json();
+        if (!response.ok || !data.ok) {
+            throw new Error(data.message || "Could not load settings.");
+        }
+    } catch (error) {
+        showAdminSectionScreen(
+            "Annual Form Promotion",
+            "Yearly student progression",
+            '<p>Could not load the promotion settings. Please return and try again.</p>'
+        );
+        return;
+    }
+
+    const enabled = data.enabled === true;
+    const last = data.last_run;
+    const lastRunHtml = last
+        ? `<p><strong>Last recorded year:</strong> ${last.academic_year}</p>
+           <p><strong>Status:</strong> ${last.status}</p>
+           <p><strong>Started:</strong> ${last.started_at || "—"}</p>
+           <p><strong>Completed:</strong> ${last.completed_at || "—"}</p>
+           <p><strong>Promoted:</strong> ${(last.details || {}).promoted ?? "—"}</p>
+           <p><strong>Graduated and archived:</strong> ${(last.details || {}).graduated_archived ?? "—"}</p>`
+        : "<p>No annual promotion run has been recorded yet.</p>";
+
+    const toggleHtml = data.can_manage
+        ? `<button type="button" class="dashboard-menu-card"
+               onclick="toggleAnnualPromotionSetting(${!enabled})">
+               <strong>${enabled ? "Turn OFF automation" : "Turn ON automation"}</strong>
+               <small>Only the Main Administrator can change this setting.</small>
+           </button>`
+        : "<p>View only: only the Main Administrator can change this setting.</p>";
+
+    const content = `
+        <section style="padding:16px">
+            <h3>Automation: ${enabled ? "ON" : "OFF"}</h3>
+            <p>The default is OFF. Turning it ON does not immediately promote students.</p>
+            ${toggleHtml}
+            <hr>
+            <h3>Annual rules</h3>
+            <ul>
+                <li>Form 1 → Form 2</li>
+                <li>Form 2 → Form 3</li>
+                <li>Form 3 → Form 4</li>
+                <li>Form 4 stays in Form 4</li>
+                <li>Form 5 → Form 6</li>
+                <li>Form 6 is marked graduated and archived, not deleted</li>
+            </ul>
+            <p>Only students registered before January 1 of the promotion year are considered.
+            Student IDs, passwords, and historical results are retained.</p>
+            <h3>Promotion history</h3>
+            ${lastRunHtml}
+        </section>`;
+    showAdminSectionScreen(
+        "Annual Form Promotion",
+        "Yearly student progression",
+        content
+    );
+}
+
+async function toggleAnnualPromotionSetting(enabled) {
+    if (!confirm(
+        "Save annual promotion as " + (enabled ? "ON" : "OFF") +
+        "? This will not promote students immediately."
+    )) {
+        return;
+    }
+
+    try {
+        const token = localStorage.getItem("MSA_ADMIN_TOKEN") || "";
+        const response = await fetch("/api/admin/annual-promotion", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token
+            },
+            body: JSON.stringify({ enabled })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+            alert(data.message || "Could not save the setting.");
+            return;
+        }
+        alert(data.message || "Setting saved.");
+        await showAnnualPromotionScreen();
+    } catch (error) {
+        alert("Could not save the setting. Please try again.");
     }
 }

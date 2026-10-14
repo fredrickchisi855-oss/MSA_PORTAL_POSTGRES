@@ -3433,3 +3433,123 @@ footer {
         font-size: 12px;
     }
 }
+
+/* MSA_STUDENT_LIST_LAYOUT_FIX_V1 */
+.student-row {
+    text-align: left !important;
+}
+
+.student-row > label {
+    flex: 0 0 auto !important;
+    margin-left: 0 !important;
+    margin-right: 10px !important;
+}
+
+.student-row input[type="checkbox"] {
+    flex: 0 0 auto !important;
+    margin: 0 10px 0 0 !important;
+    align-self: center !important;
+}
+
+.student-row .student-info,
+.student-row .student-details,
+.student-row .student-name {
+    text-align: left !important;
+}
+
+
+/* MSA_STUDENT_ROW_PROFESSIONAL_LAYOUT_V1 */
+.student-row.msa-student-row-layout {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    gap: 12px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    text-align: left !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-identity {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    text-align: left !important;
+    box-sizing: border-box !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-checkbox {
+    display: block !important;
+    flex: 0 0 18px !important;
+    width: 18px !important;
+    min-width: 18px !important;
+    height: 18px !important;
+    margin: 3px 0 0 !important;
+    padding: 0 !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-information {
+    display: flex !important;
+    flex: 1 1 auto !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 5px !important;
+    min-width: 0 !important;
+    text-align: left !important;
+    overflow-wrap: anywhere !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-full-name {
+    display: block !important;
+    width: 100% !important;
+    text-align: left !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-meta {
+    display: block !important;
+    text-align: left !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-status {
+    display: block !important;
+    margin: 2px 0 !important;
+    text-align: left !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-actions {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    width: 100% !important;
+}
+
+.student-row.msa-student-row-layout .msa-student-actions .admin-button {
+    margin: 0 !important;
+    max-width: 100% !important;
+}
+
+
+/* MSA_FAST_BULK_FORM_CHANGE_V1 */
+.msa-student-new-tag {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    margin: 3px 0;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #e0f2e8;
+    color: #166534;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}

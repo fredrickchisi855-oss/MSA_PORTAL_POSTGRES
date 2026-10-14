@@ -42,6 +42,25 @@ def initialize_database():
     """)
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS student_registrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            normalized_name TEXT NOT NULL,
+            form INTEGER NOT NULL CHECK(form BETWEEN 1 AND 6),
+            class_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending', 'approved', 'rejected')),
+            review_reason TEXT,
+            matched_student_id INTEGER,
+            approved_student_id INTEGER,
+            reviewed_by TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at TEXT
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS academic_years (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             year INTEGER NOT NULL UNIQUE,
@@ -104,34 +123,30 @@ def initialize_database():
         ORDER BY id
     """).fetchall()
 
+    import secrets
+
     for student in existing_students:
-        max_row = conn.execute("""
-            SELECT MAX(
-                CASE
-                    WHEN student_id_code LIKE 'MSA-%'
-                    THEN CAST(SUBSTR(student_id_code, 5) AS INTEGER)
-                    ELSE 0
-                END
-            )
+        rows = conn.execute("""
+            SELECT student_id_code
             FROM students
-        """).fetchone()
+            WHERE student_id_code IS NOT NULL
+              AND TRIM(student_id_code) != ''
+        """).fetchall()
+        used = {str(row[0]) for row in rows}
+        available = [
+            f"MSA-{number:03d}"
+            for number in range(1, 1000)
+            if f"MSA-{number:03d}" not in used
+        ]
+        if not available:
+            raise RuntimeError("All 999 MSA student IDs are assigned.")
 
-        next_number = int(max_row[0] or 0) + 1
-        student_code = f"MSA-{next_number:02d}"
-
-        while conn.execute("""
-            SELECT 1
-            FROM students
-            WHERE student_id_code = ?
-            LIMIT 1
-        """, (student_code,)).fetchone():
-            next_number += 1
-            student_code = f"MSA-{next_number:02d}"
-
+        student_code = secrets.choice(available)
         conn.execute("""
             UPDATE students
             SET student_id_code = ?
             WHERE id = ?
+              AND (student_id_code IS NULL OR TRIM(student_id_code) = '')
         """, (student_code, student["id"]))
 
     conn.execute("""

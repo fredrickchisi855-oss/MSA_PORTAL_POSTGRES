@@ -1964,3 +1964,149 @@ async function msaLoadAnnouncements() {
 
 // app.js is loaded at the end of the portal HTML, after the body exists.
 msaLoadAnnouncements();
+
+
+// MSA PORTAL: Student self-registration. Existing portal screens are preserved.
+function showStudentRegistration() {
+    portal.innerHTML = `
+        <div class="page registration-page">
+            <button class="back-button" onclick="goHome()">← BACK</button>
+            <div class="page-icon">📝</div>
+            <h1>STUDENT REGISTRATION</h1>
+            <p class="page-subtitle">CREATE YOUR STUDENT ACCOUNT</p>
+
+            <form id="studentRegistrationForm" class="registration-form">
+                <label for="registrationFullName">Full name</label>
+                <input id="registrationFullName" name="full_name"
+                    type="text" autocomplete="name" maxlength="120"
+                    placeholder="Enter your full name" required>
+
+                <label for="registrationForm">Form</label>
+                <select id="registrationForm" name="form" required>
+                    <option value="">Select your form</option>
+                    <option value="1">Form 1</option>
+                    <option value="2">Form 2</option>
+                    <option value="3">Form 3</option>
+                    <option value="4">Form 4</option>
+                    <option value="5">Form 5</option>
+                    <option value="6">Form 6</option>
+                </select>
+
+                <label for="registrationClass">Class / stream</label>
+                <input id="registrationClass" name="class_name"
+                    type="text" maxlength="80"
+                    placeholder="Enter your class or stream" required>
+
+                <label for="registrationPassword">Create password or PIN</label>
+                <input id="registrationPassword" name="password"
+                    type="password" autocomplete="new-password"
+                    placeholder="4-digit PIN or 8-character password"
+                    minlength="4" required>
+
+                <label for="registrationConfirmPassword">Confirm password or PIN</label>
+                <input id="registrationConfirmPassword" name="confirm_password"
+                    type="password" autocomplete="new-password"
+                    placeholder="Enter it again" minlength="4" required>
+
+                <p class="registration-security-note">
+                    Your details will be checked before an account is approved.
+                    Keep your student ID and password/PIN private.
+                </p>
+
+                <button class="primary-button" id="registrationSubmitButton" type="submit">
+                    SUBMIT REGISTRATION
+                </button>
+                <div id="registrationMessage" role="status" aria-live="polite"></div>
+            </form>
+        </div>
+    `;
+
+    const form = document.getElementById("studentRegistrationForm");
+    form.addEventListener("submit", submitStudentRegistration);
+}
+
+async function submitStudentRegistration(event) {
+    event.preventDefault();
+
+    const fullName = document.getElementById("registrationFullName").value.trim();
+    const form = document.getElementById("registrationForm").value;
+    const className = document.getElementById("registrationClass").value.trim();
+    const password = document.getElementById("registrationPassword").value;
+    const confirmPassword = document.getElementById("registrationConfirmPassword").value;
+    const message = document.getElementById("registrationMessage");
+    const button = document.getElementById("registrationSubmitButton");
+
+    if (!fullName || !form || !className || !password) {
+        message.textContent = "Please complete every field.";
+        return;
+    }
+
+    if (password !== confirmPassword) {
+        message.textContent = "The passwords/PINs do not match.";
+        return;
+    }
+
+    if (!((password.length === 4 && /^\d{4}$/.test(password)) || password.length === 8)) {
+        message.textContent = "Use a 4-digit PIN or an 8-character password.";
+        return;
+    }
+
+    button.disabled = true;
+    message.textContent = "Submitting registration…";
+
+    try {
+        const response = await fetch("/api/student-registrations", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                full_name: fullName,
+                form: Number(form),
+                class_name: className,
+                password: password,
+                confirm_password: confirmPassword
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            message.textContent = data.message || "Registration could not be submitted.";
+            return;
+        }
+
+        if (data.status === "pending") {
+            portal.innerHTML = `
+                <div class="page">
+                    <button class="back-button" onclick="goHome()">← HOME</button>
+                    <div class="page-icon">🕒</div>
+                    <h1>REGISTRATION UNDER REVIEW</h1>
+                    <div class="info-box">
+                        <p>${escapeHtml(data.message || "An administrator must review your details before an account is created.")}</p>
+                        <p>Please do not submit the same registration again.</p>
+                    </div>
+                </div>
+            `;
+            return;
+        }
+
+        portal.innerHTML = `
+            <div class="page">
+                <button class="back-button" onclick="goHome()">← HOME</button>
+                <div class="page-icon">✅</div>
+                <h1>REGISTRATION APPROVED</h1>
+                <div class="info-box">
+                    <p>Your student account has been created.</p>
+                    <p><strong>Your student ID:</strong></p>
+                    <h2>${escapeHtml(data.student_id_code || "")}</h2>
+                    <p>Keep this ID and your password/PIN private.</p>
+                    <p>You can now return to the home screen and view results when they are available.</p>
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        message.textContent = "Connection error. Please try again later.";
+    } finally {
+        const currentButton = document.getElementById("registrationSubmitButton");
+        if (currentButton) currentButton.disabled = false;
+    }
+}
