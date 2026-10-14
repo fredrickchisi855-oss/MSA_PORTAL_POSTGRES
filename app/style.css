@@ -1473,3 +1473,47 @@ footer span {
         font-size: 19px;
     }
 }
+
+
+/* MSA PORTAL student registration additions */
+.registration-entry-button {
+    margin-top: 12px;
+}
+.registration-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+}
+.registration-form label {
+    color: #d9e8f7;
+    font-size: 14px;
+    font-weight: 700;
+    margin-top: 5px;
+}
+.registration-form input,
+.registration-form select {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 46px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.07);
+    color: inherit;
+    font: inherit;
+}
+.registration-form select option {
+    color: #111;
+    background: #fff;
+}
+.registration-security-note {
+    font-size: 13px;
+    line-height: 1.5;
+    opacity: 0.9;
+}
+#registrationMessage {
+    margin-top: 8px;
+    overflow-wrap: anywhere;
+}

@@ -65,6 +65,9 @@ def _postgres_sql(sql):
             "student_login_security",
             "password_reset_attempts",
             "announcements",
+            "student_registrations",
+            "msa_annual_promotion_settings",
+            "msa_annual_promotion_runs",
         }
         if table_name not in allowed_tables:
             raise ValueError(f"Unsupported table_info request: {table_name}")

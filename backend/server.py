@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import hashlib
+import datetime as datetime_module
 import mimetypes
 from pathlib import Path
 from datetime import datetime
@@ -15,6 +16,12 @@ from datetime import datetime
 from database import initialize_database, ensure_postgres_admin
 from postgres_migrations import apply_postgres_migrations
 from db_connection import get_connection
+from annual_promotion import (
+    annual_promotion_status,
+    set_annual_promotion_enabled,
+    run_annual_promotion,
+    start_annual_promotion_scheduler,
+)
 import secrets
 
 
@@ -211,6 +218,55 @@ def verify_admin_password(password, stored_hash):
         return False
 
 
+
+def hash_student_credential(credential):
+    """Hash a student password/PIN using PBKDF2-SHA256."""
+    salt = secrets.token_bytes(16)
+    iterations = 200000
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        str(credential).encode("utf-8"),
+        salt,
+        iterations
+    )
+    return (
+        f"pbkdf2_sha256${iterations}$"
+        f"{salt.hex()}${digest.hex()}"
+    )
+
+
+def verify_student_credential(credential, stored):
+    """Support new hashes and existing legacy plaintext credentials."""
+    stored = str(stored or "")
+    credential = str(credential or "")
+
+    if stored.startswith("pbkdf2_sha256$"):
+        return verify_admin_password(credential, stored)
+
+    return secrets.compare_digest(stored, credential)
+
+
+def generate_unique_student_id(conn):
+    """Choose a random unused MSA-001 through MSA-999 student ID."""
+    import secrets
+
+    rows = conn.execute("""
+        SELECT student_id_code
+        FROM students
+        WHERE student_id_code IS NOT NULL
+          AND TRIM(student_id_code) != ''
+    """).fetchall()
+    used = {str(row[0]) for row in rows}
+    available = [
+        f"MSA-{number:03d}"
+        for number in range(1, 1000)
+        if f"MSA-{number:03d}" not in used
+    ]
+    if not available:
+        raise RuntimeError("All 999 MSA student IDs are assigned.")
+    return secrets.choice(available)
+
+
 def get_admin_token(handler):
     header = handler.headers.get("Authorization", "")
 
@@ -312,6 +368,23 @@ class MSAHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+
+        if path == "/api/admin/annual-promotion":
+            if not require_admin(self):
+                return
+            try:
+                result = annual_promotion_status()
+                session = current_admin(self) or {}
+                result["can_manage"] = session.get("role") == "main_admin"
+                send_json(self, result)
+            except Exception as exc:
+                print("Annual promotion status error:", str(exc))
+                send_json(self, {
+                    "ok": False,
+                    "message": "Could not load annual promotion status."
+                }, 500)
+            return
+
 
         # ---------------------------------------------
         # WEBSITE / STATIC FILES
@@ -663,7 +736,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                     # CORRECT PASSWORD
                     # -----------------------------------------
 
-                    if str(student["password"]) == str(password):
+                    if verify_student_credential(password, student["password"]):
 
                         conn.execute("""
                             UPDATE student_login_security
@@ -1550,7 +1623,6 @@ class MSAHandler(BaseHTTPRequestHandler):
                 }, 400)
                 return
 
-            from datetime import datetime
 
             try:
                 expires = datetime.strptime(
@@ -1589,7 +1661,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 SET password = ?
                 WHERE id = ?
             """, (
-                new_credential,
+                hash_student_credential(new_credential),
                 row["student_id"]
             ))
 
@@ -1652,6 +1724,36 @@ class MSAHandler(BaseHTTPRequestHandler):
                 "message": "Reset request marked as viewed."
             })
             return
+
+
+        if path == "/api/admin/student-registrations":
+            if not require_admin(self):
+                return
+
+            conn = get_connection()
+            try:
+                rows = conn.execute("""
+                    SELECT id, full_name, form, class_name,
+                           review_reason, created_at
+                    FROM student_registrations
+                    WHERE status = 'pending'
+                    ORDER BY created_at ASC, id ASC
+                """).fetchall()
+
+                send_json(self, {
+                    "ok": True,
+                    "registrations": [dict(row) for row in rows]
+                })
+                return
+            except Exception as exc:
+                print("STUDENT REGISTRATION REVIEW GET ERROR:", repr(exc))
+                send_json(self, {
+                    "ok": False,
+                    "message": "Unable to load student registrations."
+                }, 500)
+                return
+            finally:
+                conn.close()
 
         if path == "/api/admin/password-reset-requests":
             if not require_admin(self):
@@ -1968,6 +2070,34 @@ class MSAHandler(BaseHTTPRequestHandler):
 
         # ---------------------------------------------
         # ---------------------------------------------
+
+        if path == "/api/admin/annual-promotion":
+            if not require_main_admin(self):
+                return
+            enabled = data.get("enabled")
+            if not isinstance(enabled, bool):
+                send_json(self, {
+                    "ok": False,
+                    "message": "enabled must be true or false."
+                }, 400)
+                return
+            try:
+                set_annual_promotion_enabled(enabled)
+                send_json(self, {
+                    "ok": True,
+                    "enabled": enabled,
+                    "message": (
+                        "Setting saved. No students were promoted now."
+                    )
+                })
+            except Exception as exc:
+                print("Annual promotion setting error:", str(exc))
+                send_json(self, {
+                    "ok": False,
+                    "message": "Could not save the annual promotion setting."
+                }, 500)
+            return
+
         # CLEAR PASSWORD RESET CENTRE RECORDS ONLY
         if path == "/api/admin/password-reset-requests/clear-all":
             if not require_admin(self):
@@ -2009,6 +2139,164 @@ class MSAHandler(BaseHTTPRequestHandler):
 
         # MAIN ADMINISTRATOR MANAGEMENT - POST
         # ---------------------------------------------
+
+        # ---------------------------------------------------------
+        # ADD ADDITIONAL ADMINISTRATOR (MAIN ADMIN ONLY)
+        # Maximum: five accounts in addition to the Main Administrator.
+        # ---------------------------------------------------------
+        if path == "/api/admin/users":
+            if not require_main_admin(self):
+                return
+
+            display_name = str(data.get("display_name", "")).strip()
+            username = str(data.get("username", "")).strip()
+            password = str(data.get("password", ""))
+
+            if not display_name or not username or not password:
+                send_json(self, {
+                    "ok": False,
+                    "message": "Display name, username and password are required."
+                }, 400)
+                return
+
+            if len(username) > 80 or len(display_name) > 120:
+                send_json(self, {
+                    "ok": False,
+                    "message": "Username or display name is too long."
+                }, 400)
+                return
+
+            if len(password) < 8:
+                send_json(self, {
+                    "ok": False,
+                    "message": "Password must contain at least 8 characters."
+                }, 400)
+                return
+
+            import hashlib as _create_admin_hashlib
+            import secrets as _create_admin_secrets
+
+            salt = _create_admin_secrets.token_bytes(16)
+            digest = _create_admin_hashlib.pbkdf2_hmac(
+                "sha256", password.encode("utf-8"), salt, 200000
+            )
+            password_hash = (
+                "pbkdf2_sha256$200000$"
+                + salt.hex() + "$" + digest.hex()
+            )
+
+            conn = get_connection()
+            try:
+                # Count every additional account, including disabled ones.
+                # This prevents disabling accounts to bypass the limit.
+                count_row = conn.execute("""
+                    SELECT COUNT(*) AS total
+                    FROM admin_users
+                    WHERE role IS NULL OR role != 'main_admin'
+                """).fetchone()
+                additional_count = int(count_row["total"])
+
+                if additional_count >= 5:
+                    send_json(self, {
+                        "ok": False,
+                        "message": "Maximum reached: only five additional administrator accounts are allowed."
+                    }, 409)
+                    return
+
+                existing = conn.execute("""
+                    SELECT id FROM admin_users
+                    WHERE username = ?
+                    LIMIT 1
+                """, (username,)).fetchone()
+
+                if existing is not None:
+                    send_json(self, {
+                        "ok": False,
+                        "message": "That username is already in use."
+                    }, 409)
+                    return
+
+                conn.execute("""
+                    INSERT INTO admin_users
+                        (username, display_name, role, password_hash,
+                         active, created_at, updated_at)
+                    VALUES (?, ?, 'admin', ?, 1,
+                            CAST(CURRENT_TIMESTAMP AS TEXT),
+                            CAST(CURRENT_TIMESTAMP AS TEXT))
+                """, (username, display_name, password_hash))
+                conn.commit()
+
+                send_json(self, {
+                    "ok": True,
+                    "message": "Administrator account created successfully."
+                }, 201)
+                return
+            finally:
+                conn.close()
+
+        # ---------------------------------------------------------
+        # REMOVE ADDITIONAL ADMINISTRATOR (MAIN ADMIN ONLY)
+        # Deletes only the admin_users account row, never school data.
+        # ---------------------------------------------------------
+        remove_match = __import__('re').fullmatch(
+            r"/api/admin/users/([0-9]+)/remove", path
+        )
+        if remove_match:
+            if not require_main_admin(self):
+                return
+
+            admin_id = int(remove_match.group(1))
+            current_session = get_admin_session(self)
+            if current_session is not None and int(
+                current_session.get("admin_id", -1)
+            ) == admin_id:
+                send_json(self, {
+                    "ok": False,
+                    "message": "You cannot remove your own administrator account."
+                }, 403)
+                return
+
+            conn = get_connection()
+            try:
+                target = conn.execute("""
+                    SELECT id, role FROM admin_users
+                    WHERE id = ?
+                    LIMIT 1
+                """, (admin_id,)).fetchone()
+
+                if target is None:
+                    send_json(self, {
+                        "ok": False,
+                        "message": "Administrator not found."
+                    }, 404)
+                    return
+
+                if target["role"] == "main_admin":
+                    send_json(self, {
+                        "ok": False,
+                        "message": "The Main Administrator account cannot be removed."
+                    }, 403)
+                    return
+
+                conn.execute(
+                    "DELETE FROM admin_users WHERE id = ?",
+                    (admin_id,)
+                )
+                conn.commit()
+
+                # Invalidate every in-memory session for this account.
+                for token, session in list(ADMIN_SESSIONS.items()):
+                    if int(session.get("admin_id", -1)) == admin_id:
+                        ADMIN_SESSIONS.pop(token, None)
+
+                send_json(self, {
+                    "ok": True,
+                    "message": "Administrator account removed successfully."
+                })
+                return
+            finally:
+                conn.close()
+
         if path.startswith("/api/admin/users/"):
             if not require_main_admin(self):
                 return
@@ -2131,7 +2419,7 @@ class MSAHandler(BaseHTTPRequestHandler):
 
                     salt = __import__('secrets').token_bytes(16)
 
-                    digest = hashlib.pbkdf2_hmac(
+                    digest = __import__("hashlib").pbkdf2_hmac(
                         "sha256",
                         password.encode("utf-8"),
                         salt,
@@ -2275,6 +2563,335 @@ class MSAHandler(BaseHTTPRequestHandler):
                 conn.close()
 
 
+
+
+        if path.startswith("/api/admin/student-registrations/"):
+            if not require_admin(self):
+                return
+
+            parts = path.strip("/").split("/")
+            if (
+                len(parts) != 5
+                or parts[0] != "api"
+                or parts[1] != "admin"
+                or parts[2] != "student-registrations"
+                or parts[4] not in ("approve", "reject")
+            ):
+                send_json(self, {
+                    "ok": False, "message": "Invalid registration review request."
+                }, 404)
+                return
+
+            try:
+                registration_id = int(parts[3])
+            except (TypeError, ValueError):
+                send_json(self, {
+                    "ok": False, "message": "Invalid registration ID."
+                }, 400)
+                return
+
+            action = parts[4]
+            conn = get_connection()
+            try:
+                registration = conn.execute("""
+                    SELECT id, full_name, form, class_name, password_hash, status
+                    FROM student_registrations
+                    WHERE id = ?
+                    LIMIT 1
+                """, (registration_id,)).fetchone()
+
+                if registration is None:
+                    send_json(self, {
+                        "ok": False, "message": "Registration not found."
+                    }, 404)
+                    return
+
+                if registration["status"] != "pending":
+                    send_json(self, {
+                        "ok": False,
+                        "message": "This registration has already been reviewed."
+                    }, 409)
+                    return
+
+                reviewed_at = datetime_module.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+                if action == "reject":
+                    conn.execute("""
+                        UPDATE student_registrations
+                        SET status = 'rejected',
+                            reviewed_by = 'administrator',
+                            reviewed_at = ?
+                        WHERE id = ? AND status = 'pending'
+                    """, (reviewed_at, registration_id))
+                    conn.commit()
+                    send_json(self, {
+                        "ok": True, "message": "Student registration rejected."
+                    })
+                    return
+
+                codes = conn.execute("""
+                    SELECT student_id_code FROM students
+                    WHERE student_id_code IS NOT NULL
+                """).fetchall()
+
+                existing_codes = {
+                    str(row["student_id_code"]).strip()
+                    for row in codes if row["student_id_code"]
+                }
+
+                student_code = generate_unique_student_id(conn)
+
+                conn.execute("""
+                    INSERT INTO students
+                        (name, form, class_name, password, status, student_id_code)
+                    VALUES (?, ?, ?, ?, 'Active', ?)
+                """, (
+                    registration["full_name"],
+                    registration["form"],
+                    registration["class_name"],
+                    registration["password_hash"],
+                    student_code
+                ))
+
+                new_student = conn.execute("""
+                    SELECT id FROM students
+                    WHERE student_id_code = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (student_code,)).fetchone()
+
+                if new_student is None:
+                    raise RuntimeError("New student account could not be retrieved.")
+
+                conn.execute("""
+                    UPDATE student_registrations
+                    SET status = 'approved',
+                        approved_student_id = ?,
+                        reviewed_by = 'administrator',
+                        reviewed_at = ?
+                    WHERE id = ? AND status = 'pending'
+                """, (new_student["id"], reviewed_at, registration_id))
+
+                conn.commit()
+                send_json(self, {
+                    "ok": True,
+                    "message": "Registration approved. New student account created.",
+                    "student_id": new_student["id"],
+                    "student_id_code": student_code
+                })
+                return
+
+            except Exception as exc:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                print("STUDENT REGISTRATION REVIEW POST ERROR:", repr(exc))
+                send_json(self, {
+                    "ok": False,
+                    "message": "Unable to process this registration."
+                }, 500)
+                return
+            finally:
+                conn.close()
+
+        # STUDENT SELF-REGISTRATION
+        if path == "/api/student-registrations":
+            import difflib
+            import re
+
+            full_name = str(data.get("full_name", "")).strip()
+            class_name = str(data.get("class_name", "")).strip()
+            password = str(data.get("password", ""))
+            confirm_password = str(data.get("confirm_password", ""))
+
+            try:
+                form_number = int(data.get("form", 0))
+            except (TypeError, ValueError):
+                form_number = 0
+
+            if not full_name or not class_name or not password:
+                send_json(self, {
+                    "ok": False,
+                    "message": "Full name, form, class/stream and password/PIN are required."
+                }, 400)
+                return
+
+            if len(full_name) > 120 or len(class_name) > 80:
+                send_json(self, {
+                    "ok": False,
+                    "message": "Name or class/stream is too long."
+                }, 400)
+                return
+
+            if form_number not in range(1, 7):
+                send_json(self, {
+                    "ok": False,
+                    "message": "Please select a valid form."
+                }, 400)
+                return
+
+            if password != confirm_password:
+                send_json(self, {
+                    "ok": False,
+                    "message": "The passwords/PINs do not match."
+                }, 400)
+                return
+
+            if not (
+                (len(password) == 4 and password.isdigit())
+                or len(password) == 8
+            ):
+                send_json(self, {
+                    "ok": False,
+                    "message": "Use a 4-digit PIN or an 8-character password."
+                }, 400)
+                return
+
+            normalized_name = re.sub(
+                r"[^a-z0-9]", "", full_name.casefold()
+            )
+            if len(normalized_name) < 3:
+                send_json(self, {
+                    "ok": False,
+                    "message": "Please enter your full name."
+                }, 400)
+                return
+
+            conn = get_connection()
+            try:
+                # Block repeat pending/approved submissions for the same
+                # normalized name and form.
+                prior = conn.execute("""
+                    SELECT id, status
+                    FROM student_registrations
+                    WHERE normalized_name = ? AND form = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                """, (normalized_name, form_number)).fetchone()
+
+                if prior:
+                    if prior["status"] == "pending":
+                        send_json(self, {
+                            "ok": False,
+                            "message": "A registration for this name and form is already awaiting review."
+                        }, 409)
+                        return
+                    if prior["status"] == "approved":
+                        send_json(self, {
+                            "ok": False,
+                            "message": "This name and form already have a registration record. Please contact the school office if you need help."
+                        }, 409)
+                        return
+
+                students = conn.execute("""
+                    SELECT id, name, form, student_id_code
+                    FROM students
+                """).fetchall()
+
+                possible_matches = []
+                for student in students:
+                    existing_name = re.sub(
+                        r"[^a-z0-9]", "", str(student["name"] or "").casefold()
+                    )
+                    if not existing_name:
+                        continue
+                    similarity = difflib.SequenceMatcher(
+                        None, normalized_name, existing_name
+                    ).ratio()
+                    if similarity >= 0.78:
+                        possible_matches.append((similarity, student))
+
+                password_hash = hash_student_credential(password)
+
+                # Any close/identical existing name needs human review.
+                if possible_matches:
+                    possible_matches.sort(key=lambda item: item[0], reverse=True)
+                    best_match = possible_matches[0][1]
+                    conn.execute("""
+                        INSERT INTO student_registrations
+                            (full_name, normalized_name, form, class_name,
+                             password_hash, status, review_reason, matched_student_id)
+                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                    """, (
+                        full_name, normalized_name, form_number, class_name,
+                        password_hash,
+                        "Possible match with an existing student; administrator review required.",
+                        int(best_match["id"])
+                    ))
+                    conn.commit()
+                    send_json(self, {
+                        "ok": True,
+                        "status": "pending",
+                        "message": "Your details need administrator review because a similar student record may already exist."
+                    }, 202)
+                    return
+
+                # Automatically approve valid registrations when no
+                # possible duplicate was found above.
+                student_code = generate_unique_student_id(conn)
+
+                conn.execute("""
+                    INSERT INTO students
+                        (name, form, class_name, password, status,
+                         student_id_code)
+                    VALUES (?, ?, ?, ?, 'Active', ?)
+                """, (
+                    full_name, form_number, class_name,
+                    password_hash, student_code
+                ))
+
+                new_student = conn.execute("""
+                    SELECT id FROM students
+                    WHERE student_id_code = ?
+                    LIMIT 1
+                """, (student_code,)).fetchone()
+
+                if not new_student:
+                    raise RuntimeError(
+                        "Could not confirm the newly registered student."
+                    )
+
+                new_student_id = int(new_student["id"])
+
+                conn.execute("""
+                    INSERT INTO student_registrations
+                        (full_name, normalized_name, form, class_name,
+                         password_hash, status, approved_student_id,
+                         reviewed_by, reviewed_at)
+                    VALUES (?, ?, ?, ?, ?, 'approved', ?, 'system',
+                            CURRENT_TIMESTAMP)
+                """, (
+                    full_name, normalized_name, form_number, class_name,
+                    password_hash, new_student_id
+                ))
+
+                conn.commit()
+
+                send_json(self, {
+                    "ok": True,
+                    "status": "approved",
+                    "message": "Registration successful. Your student ID is "
+                               + student_code + ". You can now sign in.",
+                    "student_id": student_code,
+                    "student_id_code": student_code
+                }, 201)
+                return
+
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                send_json(self, {
+                    "ok": False,
+                    "message": "Registration could not be completed. Please try again later."
+                }, 500)
+                return
+            finally:
+                conn.close()
+
+
         # ADD STUDENT
         # ---------------------------------------------
 
@@ -2307,29 +2924,7 @@ class MSAHandler(BaseHTTPRequestHandler):
 
                 conn = get_connection()
 
-                # Generate the next permanent MSA Student ID.
-                max_row = conn.execute("""
-                    SELECT MAX(
-                        CASE
-                            WHEN SUBSTR(student_id_code, 1, 4) = 'MSA-'
-                            THEN CAST(SUBSTR(student_id_code, 5) AS INTEGER)
-                            ELSE 0
-                        END
-                    )
-                    FROM students
-                """).fetchone()
-
-                next_number = int(max_row[0] or 0) + 1
-                student_id_code = f"MSA-{next_number:02d}"
-
-                while conn.execute("""
-                    SELECT 1
-                    FROM students
-                    WHERE student_id_code = ?
-                    LIMIT 1
-                """, (student_id_code,)).fetchone():
-                    next_number += 1
-                    student_id_code = f"MSA-{next_number:02d}"
+                student_id_code = generate_unique_student_id(conn)
 
                 cursor = conn.execute("""
                     INSERT INTO students
@@ -2346,7 +2941,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                     data["name"].strip(),
                     int(data["form"]),
                     data["class_name"].strip(),
-                    data["password"].strip(),
+                    hash_student_credential(data["password"].strip()),
                     data.get("status", "Active"),
                     student_id_code
                 ))
@@ -2723,6 +3318,46 @@ class MSAHandler(BaseHTTPRequestHandler):
                 # SAVE FILE
                 # -------------------------------------
 
+                # MSA_PDF_CONTENT_DUPLICATE_CHECK_V1
+                # Reject identical PDF content for the same student and period.
+                import hashlib
+
+                uploaded_pdf_hash = hashlib.sha256(file_bytes).digest()
+                previous_results = conn.execute("""
+                    SELECT file_path
+                    FROM results
+                    WHERE student_id = ?
+                      AND academic_year = ?
+                      AND term = ?
+                """, (student_id, academic_year, term)).fetchall()
+
+                for previous_result in previous_results:
+                    if isinstance(previous_result, dict):
+                        previous_path = previous_result.get("file_path")
+                    else:
+                        previous_path = previous_result["file_path"]
+
+                    if not previous_path:
+                        continue
+
+                    try:
+                        previous_pdf = read_result_pdf(previous_path)
+                    except Exception:
+                        # Missing or inaccessible historical files must not
+                        # prevent an administrator from uploading a result.
+                        continue
+
+                    if hashlib.sha256(previous_pdf).digest() == uploaded_pdf_hash:
+                        conn.close()
+                        send_json(self, {
+                            "ok": False,
+                            "message": (
+                                "This exact PDF is already uploaded for this "
+                                "student, academic year, and term."
+                            )
+                        }, 409)
+                        return
+
                 # KEEP PREVIOUS RESULTS IN HISTORY
                 # -------------------------------------
                 # Never replace an existing result.
@@ -3049,7 +3684,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                     SET password = ?
                     WHERE id = ?
                 """, (
-                    temporary_pin,
+                    hash_student_credential(temporary_pin),
                     student_id
                 ))
 
@@ -3197,6 +3832,27 @@ class MSAHandler(BaseHTTPRequestHandler):
                         "ok": False,
                         "message": "Student not found."
                     }, 404)
+                    return
+
+                # MSA_STUDENT_RESULT_HISTORY_DELETE_PROTECTION_V1
+                # Never permanently delete a student who has result history.
+                existing_results = conn.execute("""
+                    SELECT COUNT(*) AS total
+                    FROM results
+                    WHERE student_id = ?
+                """, (student_id,)).fetchone()
+
+                if existing_results and int(existing_results["total"]) > 0:
+                    send_json(self, {
+                        "ok": False,
+                        "message": (
+                            "Deletion blocked: this student has result records. "
+                            "Keep the student to preserve their result history "
+                            "and PDF files. Disable the student instead."
+                        ),
+                        "student_id": student_id,
+                        "results_preserved": True
+                    }, 409)
                     return
 
                 result_rows = conn.execute("""
@@ -3837,7 +4493,7 @@ class MSAHandler(BaseHTTPRequestHandler):
                 SET password = ?
                 WHERE id = ?
             """, (
-                new_credential,
+                hash_student_credential(new_credential),
                 row["student_id"]
             ))
 
@@ -3900,6 +4556,8 @@ def main():
             ensure_postgres_admin()
         else:
             print("Administrator bootstrap skipped outside the test environment.")
+    start_annual_promotion_scheduler()
+
     server = HTTPServer(
         (HOST, PORT),
         MSAHandler
